@@ -1,0 +1,77 @@
+# Architecture
+
+## Overview
+
+Single-screen Textual app with `TabbedContent` (4 tabs). All tabs stay mounted simultaneously so the log panel auto-scrolls in the background while viewing other tabs.
+
+## Component Hierarchy
+
+```
+IngestorApp (app.py)
+├── Header
+├── TabbedContent
+│   ├── TabPane: Dashboard
+│   │   └── DashboardWidget (widgets/dashboard.py)
+│   │       ├── StatusCard x5 (pending/fetched/converted/failed/total)
+│   │       ├── Static (last run info)
+│   │       └── Static (config display)
+│   ├── TabPane: Operations
+│   │   └── OperationsWidget (widgets/operations.py)
+│   │       ├── Button x5 (pipeline operations)
+│   │       ├── Input x5 (label, query, limit, offset, batch_size)
+│   │       ├── ProgressBar
+│   │       └── Static (stage label)
+│   ├── TabPane: Labels
+│   │   └── LabelsWidget (widgets/labels.py)
+│   │       ├── Button (refresh)
+│   │       └── DataTable (label id, name)
+│   └── TabPane: Log
+│       └── LogPanelWidget (widgets/log_panel.py)
+│           ├── RichLog (log output)
+│           └── Button (clear)
+└── Footer
+```
+
+## Data Flow
+
+```
+User clicks button → on_button_pressed() → _run_operation()
+    → switches to Log tab
+    → @work(thread=True, exclusive=True) worker starts
+        → creates EmailIngestor lazily (triggers OAuth if needed)
+        → runs ingestor method (blocking, in worker thread)
+        → on_progress callback fires from worker thread
+            → call_from_thread() updates OperationsWidget progress
+            → call_from_thread() refreshes DashboardWidget
+        → TUILogHandler captures gmail_ingestor.* logs
+            → call_from_thread() writes to RichLog
+    → worker completes → re-enables buttons, final dashboard refresh
+```
+
+## Key Design Decisions
+
+| Decision | Rationale |
+|---|---|
+| `@work(thread=True, exclusive=True)` | Ingestor methods are sync/blocking (Gmail API calls); exclusive prevents concurrent ops |
+| `DBReader` for dashboard | Direct read-only SQLite queries avoid triggering OAuth just to view local state |
+| `os.chdir(project_dir)` on mount | `GmailIngestorSettings()` uses `.env` and resolves relative paths from CWD |
+| `TUILogHandler` on `gmail_ingestor` logger | Captures all library log output (discovery pages, fetch errors, etc.) into RichLog |
+| `set_interval(5.0)` for dashboard | Auto-polls DB during operations for live status updates |
+
+## Key Files
+
+| File | Purpose |
+|---|---|
+| `src/ingestor_tui/app.py` | Main app, CLI entry point, worker orchestration |
+| `src/ingestor_tui/db_reader.py` | Read-only SQLite queries (no OAuth needed) |
+| `src/ingestor_tui/widgets/dashboard.py` | Status cards, last run, config display |
+| `src/ingestor_tui/widgets/operations.py` | Pipeline buttons, inputs, progress bar |
+| `src/ingestor_tui/widgets/labels.py` | Gmail labels DataTable |
+| `src/ingestor_tui/widgets/log_panel.py` | RichLog + TUILogHandler |
+
+## Integration with gmail-ingestor
+
+- Uses `EmailIngestor` from `gmail_ingestor.pipeline.ingestor` for all operations
+- Uses `GmailIngestorSettings` from `gmail_ingestor.config.settings` for configuration
+- Uses `FetchProgress` from `gmail_ingestor.core.models` for progress callbacks
+- `DBReader` mirrors the SQLite schema from `gmail_ingestor.storage.tracker`
