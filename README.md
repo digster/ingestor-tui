@@ -25,18 +25,18 @@ uv run ingestor-tui --project-dir /path/to/gmail-ingestor
 
 | Tab | Key | Description |
 |-----|-----|-------------|
-| Dashboard | `d` | Status counts, last run info, configuration display |
-| Operations | `o` | Pipeline controls, parameter inputs, progress bar |
-| Labels | `l` | Gmail label browser with refresh |
+| Dashboard | `d` | Status counts, last run info, configuration display, project directory |
+| Labels | `l` | Gmail label browser with search/filter and refresh |
+| Operations | `o` | Pipeline controls, parameter inputs, progress bar, stop button |
 | Log | `g` | Real-time log output from the ingestor |
 
 Press `q` to quit.
 
 ## Features
 
-- **Dashboard**: Auto-refreshing status overview (pending/fetched/converted/failed counts), last fetch run details, and current configuration display. Reads directly from SQLite DB without triggering OAuth.
-- **Operations**: Buttons for Full Fetch, Discover, Fetch Pending, Convert Pending, and Retry Failed. Configurable parameters (label, query, limit, offset, batch size). Real-time progress bar updates.
-- **Labels**: Browse available Gmail labels in a sortable DataTable.
+- **Dashboard**: Auto-refreshing status overview (pending/fetched/converted/failed counts), last fetch run details, configuration display, and editable project directory.
+- **Operations**: Buttons for Full Fetch, Discover, Fetch Pending, Convert Pending, Retry Failed, and Stop. Confirmation dialog before running operations. Supports multiple comma-separated labels for Discover and Full Fetch. Configurable parameters (label, query, limit, offset, batch size). Real-time progress bar updates.
+- **Labels**: Browse available Gmail labels in a sortable DataTable with real-time search/filter.
 - **Log Panel**: All `gmail_ingestor.*` log output piped into a RichLog widget with syntax highlighting.
 
 ## Development

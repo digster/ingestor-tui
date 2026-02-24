@@ -6,7 +6,7 @@ from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Static
+from textual.widgets import Button, Input, Static
 
 from ingestor_tui.db_reader import DBReader
 
@@ -62,6 +62,15 @@ class DashboardWidget(Vertical):
         padding: 1;
         margin: 0 0 1 0;
     }
+    DashboardWidget .project-dir-row {
+        height: auto;
+        layout: horizontal;
+        margin: 1 0;
+    }
+    DashboardWidget #input-project-dir {
+        width: 1fr;
+        margin: 0 1 0 0;
+    }
     """
 
     def __init__(self, db_path: Path | None = None, **kwargs) -> None:
@@ -69,6 +78,11 @@ class DashboardWidget(Vertical):
         self._db_reader = DBReader(db_path) if db_path else None
 
     def compose(self) -> ComposeResult:
+        yield Static("Project Directory", classes="section-title")
+        with Horizontal(classes="project-dir-row"):
+            yield Input(placeholder="Path to project directory", id="input-project-dir")
+            yield Button("Apply", id="btn-apply-project-dir", variant="primary")
+
         yield Static("Status Overview", classes="section-title")
         with Horizontal(classes="status-row"):
             yield StatusCard("Pending", variant="card-pending", id="card-pending")

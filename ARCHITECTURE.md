@@ -12,31 +12,34 @@ IngestorApp (app.py)
 ├── TabbedContent
 │   ├── TabPane: Dashboard
 │   │   └── DashboardWidget (widgets/dashboard.py)
+│   │       ├── Input + Button (project directory)
 │   │       ├── StatusCard x5 (pending/fetched/converted/failed/total)
 │   │       ├── Static (last run info)
 │   │       └── Static (config display)
+│   ├── TabPane: Labels
+│   │   └── LabelsWidget (widgets/labels.py)
+│   │       ├── Input (filter) + Button (refresh)
+│   │       └── DataTable (label id, name)
 │   ├── TabPane: Operations
 │   │   └── OperationsWidget (widgets/operations.py)
-│   │       ├── Button x5 (pipeline operations)
+│   │       ├── Button x5 (pipeline operations) + Button (stop)
 │   │       ├── Input x5 (label, query, limit, offset, batch_size)
 │   │       ├── ProgressBar
 │   │       └── Static (stage label)
-│   ├── TabPane: Labels
-│   │   └── LabelsWidget (widgets/labels.py)
-│   │       ├── Button (refresh)
-│   │       └── DataTable (label id, name)
 │   └── TabPane: Log
 │       └── LogPanelWidget (widgets/log_panel.py)
 │           ├── RichLog (log output)
 │           └── Button (clear)
+├── ConfirmDialog (widgets/confirm_dialog.py) — modal, pushed on-demand
 └── Footer
 ```
 
 ## Data Flow
 
 ```
-User clicks button → on_button_pressed() → _run_operation()
-    → switches to Log tab
+User clicks button → on_button_pressed() (async)
+    → push_screen_wait(ConfirmDialog) → user confirms
+    → _run_operation() → switches to Log tab
     → @work(thread=True, exclusive=True) worker starts
         → creates EmailIngestor lazily (triggers OAuth if needed)
         → runs ingestor method (blocking, in worker thread)
@@ -45,6 +48,7 @@ User clicks button → on_button_pressed() → _run_operation()
             → call_from_thread() refreshes DashboardWidget
         → TUILogHandler captures gmail_ingestor.* logs
             → call_from_thread() writes to RichLog
+    → worker checks is_cancelled between label iterations
     → worker completes → re-enables buttons, final dashboard refresh
 ```
 
@@ -66,7 +70,8 @@ User clicks button → on_button_pressed() → _run_operation()
 | `src/ingestor_tui/db_reader.py` | Read-only SQLite queries (no OAuth needed) |
 | `src/ingestor_tui/widgets/dashboard.py` | Status cards, last run, config display |
 | `src/ingestor_tui/widgets/operations.py` | Pipeline buttons, inputs, progress bar |
-| `src/ingestor_tui/widgets/labels.py` | Gmail labels DataTable |
+| `src/ingestor_tui/widgets/labels.py` | Gmail labels DataTable with filter |
+| `src/ingestor_tui/widgets/confirm_dialog.py` | Reusable ModalScreen confirmation dialog |
 | `src/ingestor_tui/widgets/log_panel.py` | RichLog + TUILogHandler |
 
 ## Integration with gmail-ingestor

@@ -49,7 +49,7 @@ class OperationsWidget(Vertical):
     OperationsWidget .params-grid {
         height: auto;
         layout: grid;
-        grid-size: 2 3;
+        grid-size: 2 5;
         grid-columns: 12 1fr;
         grid-gutter: 1;
         margin: 1 0;
@@ -84,6 +84,7 @@ class OperationsWidget(Vertical):
             yield Button("Fetch Pending", id="btn-fetch-pending", variant="default")
             yield Button("Convert Pending", id="btn-convert-pending", variant="default")
             yield Button("Retry Failed", id="btn-retry-failed", variant="warning")
+            yield Button("Stop", id="btn-stop", variant="error", disabled=True)
 
         yield Static("Parameters", classes="section-title")
         with Vertical(classes="params-grid"):
@@ -120,9 +121,12 @@ class OperationsWidget(Vertical):
         }
 
     def set_running(self, running: bool) -> None:
-        """Enable/disable operation buttons."""
+        """Enable/disable operation buttons; Stop button is inverse."""
         for btn in self.query("Button"):
-            btn.disabled = running
+            if btn.id == "btn-stop":
+                btn.disabled = not running
+            else:
+                btn.disabled = running
 
     def update_progress(self, stage: str, current: int = 0, total: int = 0) -> None:
         """Update the progress display."""

@@ -11,12 +11,14 @@ from pathlib import Path
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Button, Footer, Header, TabbedContent, TabPane
+from textual.widgets import Button, Footer, Header, Input, TabbedContent, TabPane
+from textual.worker import get_current_worker
 
 from gmail_ingestor.config.settings import GmailIngestorSettings
 from gmail_ingestor.core.models import FetchProgress
 from gmail_ingestor.pipeline.ingestor import EmailIngestor
 
+from ingestor_tui.widgets.confirm_dialog import ConfirmDialog
 from ingestor_tui.widgets.dashboard import DashboardWidget
 from ingestor_tui.widgets.labels import LabelsWidget
 from ingestor_tui.widgets.log_panel import LogPanelWidget
@@ -65,8 +67,8 @@ class IngestorApp(App):
 
     BINDINGS = [
         Binding("d", "switch_tab('tab-dashboard')", "Dashboard", show=True),
-        Binding("o", "switch_tab('tab-operations')", "Operations", show=True),
         Binding("l", "switch_tab('tab-labels')", "Labels", show=True),
+        Binding("o", "switch_tab('tab-operations')", "Operations", show=True),
         Binding("g", "switch_tab('tab-log')", "Log", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
@@ -83,10 +85,10 @@ class IngestorApp(App):
         with TabbedContent(id="tabs"):
             with TabPane("Dashboard", id="tab-dashboard"):
                 yield DashboardWidget(id="dashboard")
-            with TabPane("Operations", id="tab-operations"):
-                yield OperationsWidget(id="operations")
             with TabPane("Labels", id="tab-labels"):
                 yield LabelsWidget(id="labels")
+            with TabPane("Operations", id="tab-operations"):
+                yield OperationsWidget(id="operations")
             with TabPane("Log", id="tab-log"):
                 yield LogPanelWidget(id="log-panel")
         yield Footer()
@@ -94,6 +96,8 @@ class IngestorApp(App):
     def on_mount(self) -> None:
         os.chdir(self._project_dir)
         logger.info("Working directory: %s", self._project_dir)
+
+        self.query_one("#input-project-dir", Input).value = str(self._project_dir)
 
         try:
             self._settings = GmailIngestorSettings()
@@ -174,22 +178,99 @@ class IngestorApp(App):
     def action_switch_tab(self, tab_id: str) -> None:
         self.query_one("#tabs", TabbedContent).active = tab_id
 
+    # --- Helpers ---
+
+    @staticmethod
+    def _parse_labels(label_str: str | None) -> list[str | None]:
+        """Split a comma-separated label string into individual labels."""
+        if not label_str:
+            return [None]
+        parts = [s.strip() for s in label_str.split(",") if s.strip()]
+        return parts if parts else [None]
+
     # --- Operation handlers ---
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
-        if button_id == "btn-full-fetch":
-            self._run_operation("full_fetch")
-        elif button_id == "btn-discover":
-            self._run_operation("discover")
-        elif button_id == "btn-fetch-pending":
-            self._run_operation("fetch_pending")
-        elif button_id == "btn-convert-pending":
-            self._run_operation("convert_pending")
-        elif button_id == "btn-retry-failed":
-            self._run_operation("retry_failed")
+
+        # Operations that need confirmation
+        operation_map = {
+            "btn-full-fetch": "full_fetch",
+            "btn-discover": "discover",
+            "btn-fetch-pending": "fetch_pending",
+            "btn-convert-pending": "convert_pending",
+            "btn-retry-failed": "retry_failed",
+        }
+
+        if button_id in operation_map:
+            operation = operation_map[button_id]
+            self.push_screen(
+                ConfirmDialog(f"Run [bold]{operation}[/bold]?"),
+                callback=lambda confirmed, op=operation: self._run_operation(op) if confirmed else None,
+            )
+        elif button_id == "btn-stop":
+            self._cancel_operation()
         elif button_id == "btn-refresh-labels":
             self._run_labels_refresh()
+        elif button_id == "btn-apply-project-dir":
+            self._apply_project_dir()
+
+    def _cancel_operation(self) -> None:
+        """Cancel the currently running pipeline worker."""
+        for worker in self.workers:
+            if worker.group == "pipeline" and worker.is_running:
+                worker.cancel()
+                log_panel = self.query_one("#log-panel", LogPanelWidget)
+                log_panel.write(
+                    "[yellow bold]Stop requested — will stop after current batch[/yellow bold]"
+                )
+                return
+        self.notify("No operation is running", severity="warning")
+
+    def _apply_project_dir(self) -> None:
+        """Apply a new project directory from the Dashboard input."""
+        new_dir_str = self.query_one("#input-project-dir", Input).value.strip()
+        if not new_dir_str:
+            self.notify("Project directory cannot be empty", severity="error")
+            return
+
+        new_dir = Path(new_dir_str).resolve()
+        if not new_dir.is_dir():
+            self.notify(f"Not a valid directory: {new_dir}", severity="error")
+            return
+
+        # Check if an operation is running
+        for worker in self.workers:
+            if worker.group == "pipeline" and worker.is_running:
+                self.notify("Cannot change directory while an operation is running", severity="warning")
+                return
+
+        os.chdir(new_dir)
+        self._project_dir = new_dir
+        self._ingestor = None
+        logger.info("Project directory changed to: %s", new_dir)
+
+        try:
+            self._settings = GmailIngestorSettings()
+            dashboard = self.query_one("#dashboard", DashboardWidget)
+            dashboard.set_db_path(self._settings.database_path)
+            dashboard.show_config(
+                {
+                    "Label": self._settings.label,
+                    "Batch Size": self._settings.batch_size,
+                    "Max Results/Page": self._settings.max_results_per_page,
+                    "Database": str(self._settings.database_path),
+                    "Output (Markdown)": str(self._settings.output_markdown_dir),
+                    "Output (Raw)": str(self._settings.output_raw_dir),
+                    "Credentials": str(self._settings.credentials_path),
+                    "Log Level": self._settings.log_level,
+                }
+            )
+            dashboard.refresh_status()
+            self.notify(f"Project directory: {new_dir}", severity="information")
+        except Exception as e:
+            logger.error("Failed to reload settings: %s", e)
+            self.notify(f"Settings error: {e}", severity="error")
 
     def _run_operation(self, operation: str) -> None:
         ops = self.query_one("#operations", OperationsWidget)
@@ -201,63 +282,92 @@ class IngestorApp(App):
     def _do_operation(self, operation: str) -> None:
         ops = self.query_one("#operations", OperationsWidget)
         log_panel = self.query_one("#log-panel", LogPanelWidget)
+        worker = get_current_worker()
 
         try:
             ingestor = self._get_ingestor()
             params = self.call_from_thread(ops.get_params)
+            labels = self._parse_labels(params.get("label_id"))
 
             self.call_from_thread(
                 log_panel.write, f"\n[bold]Starting: {operation}[/bold]"
             )
 
             if operation == "full_fetch":
-                result = ingestor.run(**params)
-                self.call_from_thread(
-                    log_panel.write,
-                    f"[green]Complete — discovered={result.ids_discovered} "
-                    f"fetched={result.messages_fetched} "
-                    f"converted={result.messages_converted} "
-                    f"failed={result.messages_failed}[/green]",
-                )
+                for label_id in labels:
+                    if worker.is_cancelled:
+                        self.call_from_thread(log_panel.write, "[yellow]Cancelled[/yellow]")
+                        break
+                    run_params = {**params, "label_id": label_id}
+                    if label_id:
+                        self.call_from_thread(
+                            log_panel.write, f"[dim]Label: {label_id}[/dim]"
+                        )
+                    result = ingestor.run(**run_params)
+                    self.call_from_thread(
+                        log_panel.write,
+                        f"[green]Complete — discovered={result.ids_discovered} "
+                        f"fetched={result.messages_fetched} "
+                        f"converted={result.messages_converted} "
+                        f"failed={result.messages_failed}[/green]",
+                    )
 
             elif operation == "discover":
-                count = ingestor.run_discovery(
-                    label_id=params["label_id"],
-                    query=params["query"],
-                    limit=params["limit"],
-                    offset=params["offset"],
-                )
-                self.call_from_thread(
-                    log_panel.write, f"[green]Discovered {count} new message IDs[/green]"
-                )
+                for label_id in labels:
+                    if worker.is_cancelled:
+                        self.call_from_thread(log_panel.write, "[yellow]Cancelled[/yellow]")
+                        break
+                    if label_id:
+                        self.call_from_thread(
+                            log_panel.write, f"[dim]Label: {label_id}[/dim]"
+                        )
+                    count = ingestor.run_discovery(
+                        label_id=label_id,
+                        query=params["query"],
+                        limit=params["limit"],
+                        offset=params["offset"],
+                    )
+                    self.call_from_thread(
+                        log_panel.write, f"[green]Discovered {count} new message IDs[/green]"
+                    )
 
             elif operation == "fetch_pending":
-                count = ingestor.run_fetch_pending(
-                    limit=params["limit"],
-                    offset=params["offset"],
-                    batch_size=params["batch_size"],
-                )
-                self.call_from_thread(
-                    log_panel.write, f"[green]Fetched {count} messages[/green]"
-                )
+                if worker.is_cancelled:
+                    self.call_from_thread(log_panel.write, "[yellow]Cancelled[/yellow]")
+                else:
+                    count = ingestor.run_fetch_pending(
+                        limit=params["limit"],
+                        offset=params["offset"],
+                        batch_size=params["batch_size"],
+                    )
+                    self.call_from_thread(
+                        log_panel.write, f"[green]Fetched {count} messages[/green]"
+                    )
 
             elif operation == "convert_pending":
-                count = ingestor.run_convert_pending(
-                    limit=params["limit"],
-                    offset=params["offset"],
-                    batch_size=params["batch_size"],
-                )
-                self.call_from_thread(
-                    log_panel.write, f"[green]Converted {count} messages[/green]"
-                )
+                if worker.is_cancelled:
+                    self.call_from_thread(log_panel.write, "[yellow]Cancelled[/yellow]")
+                else:
+                    count = ingestor.run_convert_pending(
+                        limit=params["limit"],
+                        offset=params["offset"],
+                        batch_size=params["batch_size"],
+                    )
+                    self.call_from_thread(
+                        log_panel.write, f"[green]Converted {count} messages[/green]"
+                    )
 
             elif operation == "retry_failed":
-                count = ingestor.retry_failed()
-                self.call_from_thread(
-                    log_panel.write, f"[green]Reset {count} failed messages to pending[/green]"
-                )
+                if worker.is_cancelled:
+                    self.call_from_thread(log_panel.write, "[yellow]Cancelled[/yellow]")
+                else:
+                    count = ingestor.retry_failed()
+                    self.call_from_thread(
+                        log_panel.write, f"[green]Reset {count} failed messages to pending[/green]"
+                    )
 
-            self.call_from_thread(self.notify, f"{operation} completed", severity="information")
+            if not worker.is_cancelled:
+                self.call_from_thread(self.notify, f"{operation} completed", severity="information")
 
         except Exception as e:
             self.call_from_thread(
