@@ -19,7 +19,8 @@ IngestorApp (app.py)
 │   ├── TabPane: Labels
 │   │   └── LabelsWidget (widgets/labels.py)
 │   │       ├── Input (filter) + Button (refresh)
-│   │       └── DataTable (label id, name)
+│   │       ├── Action bar (selection count, Copy to Operations, Clear Selection)
+│   │       └── DataTable (checkbox, label id, name) — row-click toggles selection
 │   ├── TabPane: Operations
 │   │   └── OperationsWidget (widgets/operations.py)
 │   │       ├── Button x5 (pipeline operations) + Button (stop)
@@ -50,6 +51,11 @@ User clicks button → on_button_pressed() (async)
             → call_from_thread() writes to RichLog
     → worker checks is_cancelled between label iterations
     → worker completes → re-enables buttons, final dashboard refresh
+
+Labels → Operations copy flow:
+    User clicks rows in Labels DataTable → toggles _selected_ids set
+    → "Copy to Operations" button → posts LabelsSelected message
+    → IngestorApp.on_labels_selected() → sets #input-label value, switches to Operations tab
 ```
 
 ## Key Design Decisions

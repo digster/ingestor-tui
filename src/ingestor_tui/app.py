@@ -20,7 +20,7 @@ from gmail_ingestor.pipeline.ingestor import EmailIngestor
 
 from ingestor_tui.widgets.confirm_dialog import ConfirmDialog
 from ingestor_tui.widgets.dashboard import DashboardWidget
-from ingestor_tui.widgets.labels import LabelsWidget
+from ingestor_tui.widgets.labels import LabelsSelected, LabelsWidget
 from ingestor_tui.widgets.log_panel import LogPanelWidget
 from ingestor_tui.widgets.operations import OperationsWidget
 
@@ -174,6 +174,13 @@ class IngestorApp(App):
         self.call_from_thread(
             self.query_one("#dashboard", DashboardWidget).refresh_status
         )
+
+    def on_labels_selected(self, event: LabelsSelected) -> None:
+        """Copy selected label IDs to the Operations input and switch tab."""
+        self.query_one("#input-label", Input).value = event.label_string
+        self.action_switch_tab("tab-operations")
+        count = len(event.label_ids)
+        self.notify(f"Copied {count} label{'s' if count != 1 else ''} to Operations")
 
     def action_switch_tab(self, tab_id: str) -> None:
         self.query_one("#tabs", TabbedContent).active = tab_id

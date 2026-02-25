@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from ingestor_tui.app import IngestorApp
+from ingestor_tui.widgets.labels import LabelsSelected, LabelsWidget
 
 
 @pytest.fixture
@@ -136,3 +137,75 @@ async def test_parse_labels_empty() -> None:
     """_parse_labels with None/empty should return [None]."""
     assert IngestorApp._parse_labels(None) == [None]
     assert IngestorApp._parse_labels("") == [None]
+
+
+# --- Label selection tests ---
+
+
+@pytest.mark.asyncio
+async def test_labels_copy_clear_buttons_exist(project_dir: Path) -> None:
+    """Labels tab should have Copy to Operations and Clear Selection buttons."""
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        copy_btn = app.query_one("#btn-copy-labels")
+        clear_btn = app.query_one("#btn-clear-selection")
+        assert copy_btn is not None
+        assert clear_btn is not None
+
+
+@pytest.mark.asyncio
+async def test_labels_buttons_disabled_by_default(project_dir: Path) -> None:
+    """Copy and Clear buttons should be disabled when no labels are selected."""
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        copy_btn = app.query_one("#btn-copy-labels")
+        clear_btn = app.query_one("#btn-clear-selection")
+        assert copy_btn.disabled is True
+        assert clear_btn.disabled is True
+
+
+@pytest.mark.asyncio
+async def test_labels_selection_count_starts_at_zero(project_dir: Path) -> None:
+    """Selection count indicator should show '0 selected' initially."""
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        labels_widget = app.query_one("#labels", LabelsWidget)
+        assert len(labels_widget._selected_ids) == 0
+
+
+@pytest.mark.asyncio
+async def test_labels_selected_updates_operations_input(project_dir: Path) -> None:
+    """LabelsSelected message should populate the Operations label input and switch tab."""
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        labels_widget = app.query_one("#labels", LabelsWidget)
+        labels_widget.post_message(LabelsSelected(["INBOX", "SENT"], "INBOX, SENT"))
+        await pilot.pause()
+
+        input_label = app.query_one("#input-label")
+        assert input_label.value == "INBOX, SENT"
+
+
+@pytest.mark.asyncio
+async def test_labels_single_selection(project_dir: Path) -> None:
+    """Clicking a label row should toggle its selection and update the count."""
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        labels_widget = app.query_one("#labels", LabelsWidget)
+        labels_widget.populate([
+            {"id": "INBOX", "name": "Inbox"},
+            {"id": "SENT", "name": "Sent"},
+        ])
+        await pilot.pause()
+
+        assert "INBOX" not in labels_widget._selected_ids
+
+        # Simulate row selection
+        from textual.widgets import DataTable
+        table = labels_widget.query_one("#labels-table", DataTable)
+        table.move_cursor(row=0)
+        table.action_select_cursor()
+        await pilot.pause()
+
+        assert "INBOX" in labels_widget._selected_ids
+        assert len(labels_widget._selected_ids) == 1
