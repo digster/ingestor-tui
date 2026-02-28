@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 
 from ingestor_tui.app import IngestorApp
+from ingestor_tui.preset_store import PresetStore
 from ingestor_tui.widgets.labels import LabelsSelected, LabelsWidget
+from ingestor_tui.widgets.operations import OperationsWidget
 
 
 @pytest.fixture
@@ -209,3 +211,72 @@ async def test_labels_single_selection(project_dir: Path) -> None:
 
         assert "INBOX" in labels_widget._selected_ids
         assert len(labels_widget._selected_ids) == 1
+
+
+# --- Preset UI tests ---
+
+
+@pytest.mark.asyncio
+async def test_preset_widgets_exist(project_dir: Path) -> None:
+    """Operations tab should have preset Select and buttons."""
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        assert app.query_one("#select-preset") is not None
+        assert app.query_one("#btn-preset-load") is not None
+        assert app.query_one("#btn-preset-save") is not None
+        assert app.query_one("#btn-preset-del") is not None
+
+
+@pytest.mark.asyncio
+async def test_preset_load_populates_input(project_dir: Path, tmp_path: Path) -> None:
+    """Loading a preset should populate the label input."""
+    store = PresetStore(path=tmp_path / "presets.json")
+    store.save_preset("work", "INBOX, SENT")
+
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        ops = app.query_one("#operations", OperationsWidget)
+        ops._preset_store = store
+        ops._refresh_presets()
+        await pilot.pause()
+
+        from textual.widgets import Select
+        select = ops.query_one("#select-preset", Select)
+        select.value = "work"
+        await pilot.pause()
+
+        ops._handle_load()
+        await pilot.pause()
+
+        from textual.widgets import Input
+        assert ops.query_one("#input-label", Input).value == "INBOX, SENT"
+
+
+@pytest.mark.asyncio
+async def test_preset_save_empty_warns(project_dir: Path) -> None:
+    """Saving with empty label input should show a warning notification."""
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40), notifications=True) as pilot:
+        ops = app.query_one("#operations", OperationsWidget)
+
+        from textual.widgets import Input
+        ops.query_one("#input-label", Input).value = ""
+        ops._handle_save()
+        await pilot.pause()
+
+        # Check that a warning notification was posted
+        assert any("empty" in str(n.message).lower() for n in app._notifications)
+
+
+@pytest.mark.asyncio
+async def test_preset_delete_no_selection_warns(project_dir: Path) -> None:
+    """Deleting with no preset selected should show a warning."""
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40), notifications=True) as pilot:
+        await pilot.pause()
+
+        ops = app.query_one("#operations", OperationsWidget)
+        ops._handle_delete()
+        await pilot.pause()
+
+        assert any("select" in str(n.message).lower() for n in app._notifications)

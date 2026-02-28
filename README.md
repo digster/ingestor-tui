@@ -35,7 +35,7 @@ Press `q` to quit.
 ## Features
 
 - **Dashboard**: Auto-refreshing status overview (pending/fetched/converted/failed counts), last fetch run details, configuration display, and editable project directory.
-- **Operations**: Buttons for Full Fetch, Discover, Fetch Pending, Convert Pending, Retry Failed, and Stop. Confirmation dialog before running operations. Supports multiple comma-separated labels for Discover and Full Fetch. Configurable parameters (label, query, limit, offset, batch size). Real-time progress bar updates.
+- **Operations**: Buttons for Full Fetch, Discover, Fetch Pending, Convert Pending, Retry Failed, and Stop. Confirmation dialog before running operations. Supports multiple comma-separated labels for Discover and Full Fetch. Configurable parameters (label, query, limit, offset, batch size). Real-time progress bar updates. **Label Presets**: Save, load, and delete named label presets that persist across sessions (`~/.config/ingestor-tui/label_presets.json`).
 - **Labels**: Browse available Gmail labels in a sortable DataTable with real-time search/filter.
 - **Log Panel**: All `gmail_ingestor.*` log output piped into a RichLog widget with syntax highlighting.
 

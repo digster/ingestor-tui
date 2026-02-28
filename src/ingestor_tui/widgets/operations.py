@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Grid, Horizontal, Vertical
 from textual.message import Message
-from textual.widgets import Button, Input, Label, ProgressBar, Static
+from textual.widgets import Button, Input, Label, ProgressBar, Select, Static
+from textual import work
+
+from ingestor_tui.preset_store import PresetStore
+from ingestor_tui.widgets.preset_name_dialog import PresetNameDialog
 
 
 class OperationStarted(Message):
@@ -50,7 +54,7 @@ class OperationsWidget(Vertical):
         height: auto;
         layout: grid;
         grid-size: 2 5;
-        grid-columns: 12 1fr;
+        grid-columns: 16 1fr;
         grid-gutter: 1;
         margin: 1 0;
         max-width: 60;
@@ -73,6 +77,17 @@ class OperationsWidget(Vertical):
         height: 1;
         margin: 0 0 1 0;
     }
+    OperationsWidget .preset-row {
+        height: auto;
+        layout: horizontal;
+        margin: 1 0;
+    }
+    OperationsWidget #select-preset {
+        width: 1fr;
+    }
+    OperationsWidget .preset-row Button {
+        margin: 0 0 0 1;
+    }
     """
 
     def compose(self) -> ComposeResult:
@@ -87,7 +102,14 @@ class OperationsWidget(Vertical):
             yield Button("Stop", id="btn-stop", variant="error", disabled=True)
 
         yield Static("Parameters", classes="section-title")
-        with Vertical(classes="params-grid"):
+
+        with Horizontal(classes="preset-row"):
+            yield Select[str]([], prompt="Load preset…", id="select-preset")
+            yield Button("Load", id="btn-preset-load", variant="default")
+            yield Button("Save", id="btn-preset-save", variant="success")
+            yield Button("Del", id="btn-preset-del", variant="error")
+
+        with Grid(classes="params-grid"):
             yield Label("Label")
             yield Input(placeholder="INBOX", id="input-label")
             yield Label("Query")
@@ -103,6 +125,70 @@ class OperationsWidget(Vertical):
         with Vertical(classes="progress-area"):
             yield Static("Idle", id="stage-label")
             yield ProgressBar(total=100, show_eta=False, id="progress-bar")
+
+    def __init__(self, preset_store: PresetStore | None = None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._preset_store = preset_store or PresetStore()
+
+    def on_mount(self) -> None:
+        self._refresh_presets()
+
+    def _refresh_presets(self) -> None:
+        """Reload preset options into the Select widget."""
+        presets = self._preset_store.list_presets()
+        options = [(name, name) for name in sorted(presets)]
+        self.query_one("#select-preset", Select).set_options(options)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-preset-load":
+            event.stop()
+            self._handle_load()
+        elif event.button.id == "btn-preset-save":
+            event.stop()
+            self._handle_save()
+        elif event.button.id == "btn-preset-del":
+            event.stop()
+            self._handle_delete()
+
+    def _handle_load(self) -> None:
+        select = self.query_one("#select-preset", Select)
+        if select.is_blank():
+            self.notify("Select a preset first", severity="warning")
+            return
+        labels = self._preset_store.get_preset(str(select.value))
+        if labels is not None:
+            self.query_one("#input-label", Input).value = labels
+            self.notify(f"Loaded preset '{select.value}'")
+
+    @work
+    async def _handle_save(self) -> None:
+        labels = self.query_one("#input-label", Input).value.strip()
+        if not labels:
+            self.notify("Label input is empty — nothing to save", severity="warning")
+            return
+        name = await self.app.push_screen_wait(PresetNameDialog())
+        if not name:
+            return
+        self._preset_store.save_preset(name, labels)
+        self._refresh_presets()
+        self.notify(f"Saved preset '{name}'")
+
+    @work
+    async def _handle_delete(self) -> None:
+        from ingestor_tui.widgets.confirm_dialog import ConfirmDialog
+
+        select = self.query_one("#select-preset", Select)
+        if select.is_blank():
+            self.notify("Select a preset to delete", severity="warning")
+            return
+        preset_name = str(select.value)
+        confirmed = await self.app.push_screen_wait(
+            ConfirmDialog(f"Delete preset '{preset_name}'?")
+        )
+        if confirmed:
+            self._preset_store.delete_preset(preset_name)
+            self._refresh_presets()
+            self.notify(f"Deleted preset '{preset_name}'")
 
     def get_params(self) -> dict:
         """Collect parameter values from inputs."""
@@ -120,11 +206,15 @@ class OperationsWidget(Vertical):
             "batch_size": int(batch_str) if batch_str else None,
         }
 
+    _PRESET_BUTTON_IDS = {"btn-preset-load", "btn-preset-save", "btn-preset-del"}
+
     def set_running(self, running: bool) -> None:
-        """Enable/disable operation buttons; Stop button is inverse."""
+        """Enable/disable operation buttons; Stop button is inverse. Preset buttons stay enabled."""
         for btn in self.query("Button"):
             if btn.id == "btn-stop":
                 btn.disabled = not running
+            elif btn.id in self._PRESET_BUTTON_IDS:
+                pass  # always enabled
             else:
                 btn.disabled = running
 

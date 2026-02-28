@@ -24,6 +24,7 @@ IngestorApp (app.py)
 │   ├── TabPane: Operations
 │   │   └── OperationsWidget (widgets/operations.py)
 │   │       ├── Button x5 (pipeline operations) + Button (stop)
+│   │       ├── Select + Button x3 (preset load/save/delete)
 │   │       ├── Input x5 (label, query, limit, offset, batch_size)
 │   │       ├── ProgressBar
 │   │       └── Static (stage label)
@@ -32,6 +33,7 @@ IngestorApp (app.py)
 │           ├── RichLog (log output)
 │           └── Button (clear)
 ├── ConfirmDialog (widgets/confirm_dialog.py) — modal, pushed on-demand
+├── PresetNameDialog (widgets/preset_name_dialog.py) — modal, preset name input
 └── Footer
 ```
 
@@ -67,6 +69,8 @@ Labels → Operations copy flow:
 | `os.chdir(project_dir)` on mount | `GmailIngestorSettings()` uses `.env` and resolves relative paths from CWD |
 | `TUILogHandler` on `gmail_ingestor` logger | Captures all library log output (discovery pages, fetch errors, etc.) into RichLog |
 | `set_interval(5.0)` for dashboard | Auto-polls DB during operations for live status updates |
+| `PresetStore` with `~/.config/` path | User-level config (not project-specific) so presets work across project directories |
+| Preset buttons use `event.stop()` | Keeps preset logic encapsulated in OperationsWidget, no app.py changes needed |
 
 ## Key Files
 
@@ -78,7 +82,9 @@ Labels → Operations copy flow:
 | `src/ingestor_tui/widgets/operations.py` | Pipeline buttons, inputs, progress bar |
 | `src/ingestor_tui/widgets/labels.py` | Gmail labels DataTable with filter |
 | `src/ingestor_tui/widgets/confirm_dialog.py` | Reusable ModalScreen confirmation dialog |
+| `src/ingestor_tui/widgets/preset_name_dialog.py` | Modal dialog for entering preset name |
 | `src/ingestor_tui/widgets/log_panel.py` | RichLog + TUILogHandler |
+| `src/ingestor_tui/preset_store.py` | JSON persistence for label presets (~/.config/ingestor-tui/) |
 
 ## Integration with gmail-ingestor
 
