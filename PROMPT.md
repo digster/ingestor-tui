@@ -23,3 +23,7 @@ Implement save/load label presets in Operations tab. Add PresetStore (JSON persi
 ## 2026-02-27 (Session 2)
 
 Fix `NoActiveWorker` crash when saving/deleting presets — decorate `_handle_save` and `_handle_delete` with `@work` (from `textual import work`), remove `await` from calls in `on_button_pressed`, update tests to match.
+
+## 2026-02-27 (Session 3)
+
+Accommodate gmail-ingestor changes in TUI: Add 6 new rate-limiting config settings (max_retries, initial_backoff_seconds, max_backoff_seconds, inter_batch_delay_seconds, inter_page_delay_seconds, num_retries) to Dashboard config display. Add specific RateLimitError handling in _do_operation with user-friendly message suggesting to wait or adjust settings.

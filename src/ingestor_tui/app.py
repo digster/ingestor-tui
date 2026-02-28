@@ -15,6 +15,7 @@ from textual.widgets import Button, Footer, Header, Input, TabbedContent, TabPan
 from textual.worker import get_current_worker
 
 from gmail_ingestor.config.settings import GmailIngestorSettings
+from gmail_ingestor.core.exceptions import RateLimitError
 from gmail_ingestor.core.models import FetchProgress
 from gmail_ingestor.pipeline.ingestor import EmailIngestor
 
@@ -113,6 +114,12 @@ class IngestorApp(App):
                     "Output (Raw)": str(self._settings.output_raw_dir),
                     "Credentials": str(self._settings.credentials_path),
                     "Log Level": self._settings.log_level,
+                    "Max Retries": self._settings.max_retries,
+                    "Initial Backoff (s)": self._settings.initial_backoff_seconds,
+                    "Max Backoff (s)": self._settings.max_backoff_seconds,
+                    "Inter-Batch Delay (s)": self._settings.inter_batch_delay_seconds,
+                    "Inter-Page Delay (s)": self._settings.inter_page_delay_seconds,
+                    "Num Retries": self._settings.num_retries,
                 }
             )
             dashboard.refresh_status()
@@ -271,6 +278,12 @@ class IngestorApp(App):
                     "Output (Raw)": str(self._settings.output_raw_dir),
                     "Credentials": str(self._settings.credentials_path),
                     "Log Level": self._settings.log_level,
+                    "Max Retries": self._settings.max_retries,
+                    "Initial Backoff (s)": self._settings.initial_backoff_seconds,
+                    "Max Backoff (s)": self._settings.max_backoff_seconds,
+                    "Inter-Batch Delay (s)": self._settings.inter_batch_delay_seconds,
+                    "Inter-Page Delay (s)": self._settings.inter_page_delay_seconds,
+                    "Num Retries": self._settings.num_retries,
                 }
             )
             dashboard.refresh_status()
@@ -375,6 +388,18 @@ class IngestorApp(App):
 
             if not worker.is_cancelled:
                 self.call_from_thread(self.notify, f"{operation} completed", severity="information")
+
+        except RateLimitError as e:
+            self.call_from_thread(
+                log_panel.write,
+                f"[red bold]Rate limit exceeded: {e}[/red bold]\n"
+                "[yellow]Try waiting a few minutes before retrying, or adjust "
+                "rate-limit settings (max_retries, backoff, delays) in your .env file.[/yellow]",
+            )
+            self.call_from_thread(
+                self.notify, "Rate limit exceeded — wait before retrying", severity="error"
+            )
+            logger.warning("Operation %s hit rate limit: %s", operation, e)
 
         except Exception as e:
             self.call_from_thread(
