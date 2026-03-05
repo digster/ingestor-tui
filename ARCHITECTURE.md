@@ -15,6 +15,7 @@ IngestorApp (app.py)
 │   │       ├── Input + Button (project directory)
 │   │       ├── StatusCard x5 (pending/fetched/converted/failed/total)
 │   │       ├── Static (last run info)
+│   │       ├── Static (sync state — incremental sync history per label)
 │   │       └── Static (config display)
 │   ├── TabPane: Labels
 │   │   └── LabelsWidget (widgets/labels.py)
@@ -26,6 +27,7 @@ IngestorApp (app.py)
 │   │       ├── Button x5 (pipeline operations) + Button (stop)
 │   │       ├── Select + Button x3 (preset load/save/delete)
 │   │       ├── Input x5 (label, query, limit, offset, batch_size)
+│   │       ├── Checkbox (Full Sync — force_full_sync)
 │   │       ├── ProgressBar
 │   │       └── Static (stage label)
 │   └── TabPane: Log
@@ -92,3 +94,4 @@ Labels → Operations copy flow:
 - Uses `GmailIngestorSettings` from `gmail_ingestor.config.settings` for configuration
 - Uses `FetchProgress` from `gmail_ingestor.core.models` for progress callbacks
 - `DBReader` mirrors the SQLite schema from `gmail_ingestor.storage.tracker`
+- `run()` and `run_discovery()` accept `force_full_sync` param for incremental vs full sync

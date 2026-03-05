@@ -346,6 +346,7 @@ class IngestorApp(App):
                         query=params["query"],
                         limit=params["limit"],
                         offset=params["offset"],
+                        force_full_sync=params["force_full_sync"],
                     )
                     self.call_from_thread(
                         log_panel.write, f"[green]Discovered {count} new message IDs[/green]"

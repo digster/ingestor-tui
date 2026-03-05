@@ -9,6 +9,8 @@ import pytest
 from ingestor_tui.app import IngestorApp
 from ingestor_tui.preset_store import PresetStore
 from ingestor_tui.widgets.labels import LabelsSelected, LabelsWidget
+from textual.widgets import Checkbox
+
 from ingestor_tui.widgets.operations import OperationsWidget
 
 
@@ -280,3 +282,44 @@ async def test_preset_delete_no_selection_warns(project_dir: Path) -> None:
         await pilot.pause()
 
         assert any("select" in str(n.message).lower() for n in app._notifications)
+
+
+# --- Full Sync checkbox tests ---
+
+
+@pytest.mark.asyncio
+async def test_full_sync_checkbox_present(project_dir: Path) -> None:
+    """Operations tab should have a Full Sync checkbox."""
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        cb = app.query_one("#cb-full-sync", Checkbox)
+        assert cb is not None
+        assert cb.value is False
+
+
+@pytest.mark.asyncio
+async def test_get_params_includes_force_full_sync(project_dir: Path) -> None:
+    """get_params() should include force_full_sync, defaulting to False."""
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        ops = app.query_one("#operations", OperationsWidget)
+        params = ops.get_params()
+        assert "force_full_sync" in params
+        assert params["force_full_sync"] is False
+
+
+@pytest.mark.asyncio
+async def test_full_sync_checkbox_toggles_param(project_dir: Path) -> None:
+    """Toggling the checkbox should change force_full_sync in get_params()."""
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        ops = app.query_one("#operations", OperationsWidget)
+        cb = ops.query_one("#cb-full-sync", Checkbox)
+
+        cb.value = True
+        await pilot.pause()
+        assert ops.get_params()["force_full_sync"] is True
+
+        cb.value = False
+        await pilot.pause()
+        assert ops.get_params()["force_full_sync"] is False

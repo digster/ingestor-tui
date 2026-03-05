@@ -125,9 +125,65 @@ class TestDBReader:
         assert all("message_id" in m for m in messages)
         assert all("status" in m for m in messages)
 
+    def test_get_sync_state_missing_table(self, db_path: Path) -> None:
+        """get_sync_state should return empty list when sync_state table doesn't exist."""
+        reader = DBReader(db_path)
+        assert reader.get_sync_state() == []
+
+    def test_get_sync_state_with_data(self, db_path: Path) -> None:
+        """get_sync_state should return rows from the sync_state table."""
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript("""
+            CREATE TABLE labels (
+                label_id TEXT PRIMARY KEY,
+                label_name TEXT NOT NULL
+            );
+            CREATE TABLE sync_state (
+                label_id TEXT PRIMARY KEY,
+                history_id TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO labels (label_id, label_name) VALUES ('INBOX', 'Inbox');
+            INSERT INTO sync_state (label_id, history_id, updated_at)
+                VALUES ('INBOX', '12345', '2026-03-05T10:00:00');
+        """)
+        conn.close()
+
+        reader = DBReader(db_path)
+        result = reader.get_sync_state()
+        assert len(result) == 1
+        assert result[0]["label_id"] == "INBOX"
+        assert result[0]["label_name"] == "Inbox"
+        assert result[0]["history_id"] == "12345"
+
+    def test_get_sync_state_no_label_match(self, db_path: Path) -> None:
+        """get_sync_state should handle labels not in the labels table (LEFT JOIN)."""
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript("""
+            CREATE TABLE labels (
+                label_id TEXT PRIMARY KEY,
+                label_name TEXT NOT NULL
+            );
+            CREATE TABLE sync_state (
+                label_id TEXT PRIMARY KEY,
+                history_id TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO sync_state (label_id, history_id, updated_at)
+                VALUES ('UNKNOWN', '999', '2026-03-05T10:00:00');
+        """)
+        conn.close()
+
+        reader = DBReader(db_path)
+        result = reader.get_sync_state()
+        assert len(result) == 1
+        assert result[0]["label_name"] is None
+        assert result[0]["label_id"] == "UNKNOWN"
+
     def test_nonexistent_db_returns_defaults(self, tmp_path: Path) -> None:
         reader = DBReader(tmp_path / "nope.db")
         assert reader.count_by_status() == {}
         assert reader.total_messages() == 0
         assert reader.last_run() is None
         assert reader.get_recent_messages() == []
+        assert reader.get_sync_state() == []

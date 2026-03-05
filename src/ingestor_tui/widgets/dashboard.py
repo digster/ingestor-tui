@@ -94,6 +94,9 @@ class DashboardWidget(Vertical):
         yield Static("Last Fetch Run", classes="section-title")
         yield Static("No runs yet", id="last-run-info", classes="info-panel")
 
+        yield Static("Sync State", classes="section-title")
+        yield Static("No sync data", id="sync-state-info", classes="info-panel")
+
         yield Static("Configuration", classes="section-title")
         yield Static("Not loaded", id="config-info", classes="info-panel")
 
@@ -126,6 +129,19 @@ class DashboardWidget(Vertical):
                 f"Failed: {last_run.get('messages_failed', 0)}"
             )
             self.query_one("#last-run-info", Static).update(info)
+
+        # Sync state
+        sync_data = self._db_reader.get_sync_state()
+        if sync_data:
+            lines = []
+            for row in sync_data:
+                name = row.get("label_name") or row["label_id"]
+                history_id = row.get("history_id", "—")
+                updated = row.get("updated_at", "—")
+                lines.append(f"{name}  |  history_id: {history_id}  |  updated: {updated}")
+            self.query_one("#sync-state-info", Static).update("\n".join(lines))
+        else:
+            self.query_one("#sync-state-info", Static).update("No sync data")
 
     def show_config(self, settings_dict: dict) -> None:
         """Display configuration values."""

@@ -63,6 +63,25 @@ class DBReader:
         finally:
             conn.close()
 
+    def get_sync_state(self) -> list[dict]:
+        """Get incremental sync state for all labels."""
+        if not self.exists:
+            return []
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT s.label_id, l.label_name, s.history_id, s.updated_at "
+                "FROM sync_state s "
+                "LEFT JOIN labels l ON s.label_id = l.label_id "
+                "ORDER BY s.updated_at DESC"
+            ).fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.OperationalError:
+            # Table may not exist yet if no sync has been performed
+            return []
+        finally:
+            conn.close()
+
     def get_recent_messages(self, limit: int = 20) -> list[dict]:
         """Get recently updated messages."""
         if not self.exists:

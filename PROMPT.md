@@ -27,3 +27,7 @@ Fix `NoActiveWorker` crash when saving/deleting presets — decorate `_handle_sa
 ## 2026-02-27 (Session 3)
 
 Accommodate gmail-ingestor changes in TUI: Add 6 new rate-limiting config settings (max_retries, initial_backoff_seconds, max_backoff_seconds, inter_batch_delay_seconds, inter_page_delay_seconds, num_retries) to Dashboard config display. Add specific RateLimitError handling in _do_operation with user-friendly message suggesting to wait or adjust settings.
+
+## 2026-03-05
+
+TUI Updates for gmail-ingestor incremental sync: Add "Full Sync" checkbox to Operations widget (maps to force_full_sync param). Pass force_full_sync to ingestor.run() and ingestor.run_discovery() calls. Add get_sync_state() to DBReader querying sync_state table with graceful missing-table handling. Add "Sync State" section to Dashboard showing per-label history_id and last sync timestamp. Tests for checkbox params, sync state queries, and missing table edge case.

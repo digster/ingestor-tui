@@ -5,7 +5,7 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.containers import Grid, Horizontal, Vertical
 from textual.message import Message
-from textual.widgets import Button, Input, Label, ProgressBar, Select, Static
+from textual.widgets import Button, Checkbox, Input, Label, ProgressBar, Select, Static
 from textual import work
 
 from ingestor_tui.preset_store import PresetStore
@@ -66,6 +66,9 @@ class OperationsWidget(Vertical):
     OperationsWidget .params-grid Input {
         height: 3;
     }
+    OperationsWidget #cb-full-sync {
+        margin: 1 0 0 0;
+    }
     OperationsWidget .progress-area {
         height: auto;
         margin: 1 0;
@@ -120,6 +123,8 @@ class OperationsWidget(Vertical):
             yield Input(placeholder="0", id="input-offset", type="integer")
             yield Label("Batch Size")
             yield Input(placeholder="Default", id="input-batch-size", type="integer")
+
+        yield Checkbox("Full Sync", id="cb-full-sync")
 
         yield Static("Progress", classes="section-title")
         with Vertical(classes="progress-area"):
@@ -204,6 +209,7 @@ class OperationsWidget(Vertical):
             "limit": int(limit_str) if limit_str else None,
             "offset": int(offset_str) if offset_str else 0,
             "batch_size": int(batch_str) if batch_str else None,
+            "force_full_sync": self.query_one("#cb-full-sync", Checkbox).value,
         }
 
     _PRESET_BUTTON_IDS = {"btn-preset-load", "btn-preset-save", "btn-preset-del"}
