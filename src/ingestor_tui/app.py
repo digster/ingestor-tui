@@ -27,6 +27,68 @@ from ingestor_tui.widgets.operations import OperationsWidget
 
 logger = logging.getLogger(__name__)
 
+# Maps TUI operation names to CLI subcommands
+_OPERATION_CLI_COMMANDS: dict[str, str] = {
+    "full_fetch": "fetch",
+    "discover": "discover",
+    "fetch_pending": "fetch-pending",
+    "convert_pending": "convert-pending",
+    "retry_failed": "retry",
+}
+
+# Defines which CLI flags each operation supports
+_OPERATION_CLI_FLAGS: dict[str, list[str]] = {
+    "full_fetch": ["label_id", "query", "force_full_sync", "limit", "offset", "batch_size"],
+    "discover": ["label_id", "query", "force_full_sync", "limit", "offset"],
+    "fetch_pending": ["limit", "offset", "batch_size"],
+    "convert_pending": ["limit", "offset", "batch_size"],
+    "retry_failed": [],
+}
+
+# Maps param keys to their CLI flag format
+_PARAM_TO_FLAG: dict[str, str] = {
+    "label_id": "--label",
+    "query": "--query",
+    "force_full_sync": "--full-sync",
+    "limit": "--limit",
+    "offset": "--offset",
+    "batch_size": "--batch-size",
+}
+
+
+def _build_cli_command(operation: str, params: dict) -> str:
+    """Build a CLI command string from the operation name and params.
+
+    Only includes flags with non-default values (skips None, False, offset=0).
+    """
+    subcommand = _OPERATION_CLI_COMMANDS.get(operation, operation)
+    parts = [f"gmail-ingestor {subcommand}"]
+
+    for key in _OPERATION_CLI_FLAGS.get(operation, []):
+        value = params.get(key)
+        flag = _PARAM_TO_FLAG[key]
+
+        if key == "force_full_sync":
+            # Boolean flag — only include when True
+            if value:
+                parts.append(flag)
+        elif key == "offset":
+            # Skip offset when it's the default (0)
+            if value and value != 0:
+                parts.append(f"{flag} {value}")
+        else:
+            # Skip None values
+            if value is not None:
+                # Quote string values that contain spaces or commas
+                str_val = str(value)
+                if " " in str_val or "," in str_val:
+                    parts.append(f'{flag} "{str_val}"')
+                else:
+                    parts.append(f"{flag} {str_val}")
+
+    return " ".join(parts)
+
+
 APP_CSS = """
 Screen {
     layout: vertical;
@@ -295,6 +357,10 @@ class IngestorApp(App):
     def _run_operation(self, operation: str) -> None:
         ops = self.query_one("#operations", OperationsWidget)
         ops.set_running(True)
+        # Build the full CLI command string for display
+        params = ops.get_params()
+        cli_command = _build_cli_command(operation, params)
+        self.query_one("#log-panel", LogPanelWidget).set_command(cli_command)
         self.action_switch_tab("tab-log")
         self._do_operation(operation)
 
@@ -387,7 +453,10 @@ class IngestorApp(App):
                         log_panel.write, f"[green]Reset {count} failed messages to pending[/green]"
                     )
 
-            if not worker.is_cancelled:
+            if worker.is_cancelled:
+                self.call_from_thread(log_panel.complete_command, "Cancelled")
+            else:
+                self.call_from_thread(log_panel.complete_command)
                 self.call_from_thread(self.notify, f"{operation} completed", severity="information")
 
         except RateLimitError as e:
@@ -400,6 +469,7 @@ class IngestorApp(App):
             self.call_from_thread(
                 self.notify, "Rate limit exceeded — wait before retrying", severity="error"
             )
+            self.call_from_thread(log_panel.complete_command, "Failed")
             logger.warning("Operation %s hit rate limit: %s", operation, e)
 
         except Exception as e:
@@ -407,6 +477,7 @@ class IngestorApp(App):
                 log_panel.write, f"[red bold]Error: {e}[/red bold]"
             )
             self.call_from_thread(self.notify, f"Error: {e}", severity="error")
+            self.call_from_thread(log_panel.complete_command, "Failed")
             logger.exception("Operation %s failed", operation)
 
         finally:

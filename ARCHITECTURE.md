@@ -32,6 +32,7 @@ IngestorApp (app.py)
 │   │       └── Static (stage label)
 │   └── TabPane: Log
 │       └── LogPanelWidget (widgets/log_panel.py)
+│           ├── Static (command label — shows running operation name)
 │           ├── RichLog (log output)
 │           └── Button (clear)
 ├── ConfirmDialog (widgets/confirm_dialog.py) — modal, pushed on-demand

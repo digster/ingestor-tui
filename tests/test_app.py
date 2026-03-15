@@ -6,10 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from ingestor_tui.app import IngestorApp
+from ingestor_tui.app import IngestorApp, _build_cli_command
 from ingestor_tui.preset_store import PresetStore
 from ingestor_tui.widgets.labels import LabelsSelected, LabelsWidget
-from textual.widgets import Checkbox
+from ingestor_tui.widgets.log_panel import LogPanelWidget
+from textual.widgets import Checkbox, Static
 
 from ingestor_tui.widgets.operations import OperationsWidget
 
@@ -323,3 +324,203 @@ async def test_full_sync_checkbox_toggles_param(project_dir: Path) -> None:
         cb.value = False
         await pilot.pause()
         assert ops.get_params()["force_full_sync"] is False
+
+
+# --- Command label tests ---
+
+
+@pytest.mark.asyncio
+async def test_command_label_present(project_dir: Path) -> None:
+    """Log panel should have a command label widget."""
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        label = app.query_one("#command-label", Static)
+        assert label is not None
+        assert "No command running" in str(label._Static__content)
+
+
+@pytest.mark.asyncio
+async def test_set_command_updates_label(project_dir: Path) -> None:
+    """set_command() should update the label text and add the active class."""
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        log_panel = app.query_one("#log-panel", LogPanelWidget)
+        log_panel.set_command("gmail-ingestor fetch --label INBOX")
+        await pilot.pause()
+
+        label = app.query_one("#command-label", Static)
+        assert "Running: gmail-ingestor fetch --label INBOX" in str(label._Static__content)
+        assert label.has_class("active")
+
+
+@pytest.mark.asyncio
+async def test_complete_command_shows_completed(project_dir: Path) -> None:
+    """complete_command() should show 'Completed: {name}' with .completed class."""
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        log_panel = app.query_one("#log-panel", LogPanelWidget)
+
+        log_panel.set_command("gmail-ingestor discover --label INBOX")
+        await pilot.pause()
+        log_panel.complete_command()
+        await pilot.pause()
+
+        label = app.query_one("#command-label", Static)
+        assert "Completed: gmail-ingestor discover --label INBOX" in str(label._Static__content)
+        assert label.has_class("completed")
+        assert not label.has_class("active")
+
+
+@pytest.mark.asyncio
+async def test_complete_command_failed_shows_error(project_dir: Path) -> None:
+    """complete_command('Failed') should show 'Failed: {name}' with .error class."""
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        log_panel = app.query_one("#log-panel", LogPanelWidget)
+
+        log_panel.set_command("gmail-ingestor fetch --label INBOX")
+        await pilot.pause()
+        log_panel.complete_command("Failed")
+        await pilot.pause()
+
+        label = app.query_one("#command-label", Static)
+        assert "Failed: gmail-ingestor fetch --label INBOX" in str(label._Static__content)
+        assert label.has_class("error")
+        assert not label.has_class("active")
+        assert not label.has_class("completed")
+
+
+@pytest.mark.asyncio
+async def test_complete_command_cancelled_shows_error(project_dir: Path) -> None:
+    """complete_command('Cancelled') should show 'Cancelled: {name}' with .error class."""
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        log_panel = app.query_one("#log-panel", LogPanelWidget)
+
+        log_panel.set_command("gmail-ingestor fetch-pending --batch-size 50")
+        await pilot.pause()
+        log_panel.complete_command("Cancelled")
+        await pilot.pause()
+
+        label = app.query_one("#command-label", Static)
+        assert "Cancelled: gmail-ingestor fetch-pending --batch-size 50" in str(label._Static__content)
+        assert label.has_class("error")
+        assert not label.has_class("active")
+
+
+@pytest.mark.asyncio
+async def test_clear_command_resets_label(project_dir: Path) -> None:
+    """clear_command() should reset the label to idle state (e.g. Clear button)."""
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        log_panel = app.query_one("#log-panel", LogPanelWidget)
+
+        # Set, complete, then clear
+        log_panel.set_command("discover")
+        await pilot.pause()
+        log_panel.complete_command()
+        await pilot.pause()
+        log_panel.clear_command()
+        await pilot.pause()
+
+        label = app.query_one("#command-label", Static)
+        assert "No command running" in str(label._Static__content)
+        assert not label.has_class("active")
+        assert not label.has_class("completed")
+        assert not label.has_class("error")
+
+
+# --- _build_cli_command() unit tests ---
+
+
+# Default params used as a baseline — all values at their defaults
+_DEFAULT_PARAMS = {
+    "label_id": None,
+    "query": None,
+    "limit": None,
+    "offset": 0,
+    "batch_size": None,
+    "force_full_sync": False,
+}
+
+
+def test_build_cli_discover_with_label() -> None:
+    """discover with a label should produce: gmail-ingestor discover --label INBOX"""
+    params = {**_DEFAULT_PARAMS, "label_id": "INBOX"}
+    assert _build_cli_command("discover", params) == "gmail-ingestor discover --label INBOX"
+
+
+def test_build_cli_fetch_all_flags() -> None:
+    """full_fetch with all flags set should include every relevant flag."""
+    params = {
+        "label_id": "INBOX",
+        "query": "from:test",
+        "force_full_sync": True,
+        "limit": 100,
+        "offset": 10,
+        "batch_size": 50,
+    }
+    result = _build_cli_command("full_fetch", params)
+    assert result == (
+        'gmail-ingestor fetch --label INBOX --query from:test '
+        '--full-sync --limit 100 --offset 10 --batch-size 50'
+    )
+
+
+def test_build_cli_fetch_pending_batch_size() -> None:
+    """fetch_pending with only batch_size should produce a clean command."""
+    params = {**_DEFAULT_PARAMS, "batch_size": 50}
+    assert _build_cli_command("fetch_pending", params) == "gmail-ingestor fetch-pending --batch-size 50"
+
+
+def test_build_cli_convert_pending_no_params() -> None:
+    """convert_pending with all defaults should produce just the subcommand."""
+    assert _build_cli_command("convert_pending", _DEFAULT_PARAMS) == "gmail-ingestor convert-pending"
+
+
+def test_build_cli_retry_no_flags() -> None:
+    """retry_failed never has flags."""
+    assert _build_cli_command("retry_failed", _DEFAULT_PARAMS) == "gmail-ingestor retry"
+    # Even with non-default values, retry ignores all params
+    params = {**_DEFAULT_PARAMS, "label_id": "INBOX", "limit": 100}
+    assert _build_cli_command("retry_failed", params) == "gmail-ingestor retry"
+
+
+def test_build_cli_none_params_skipped() -> None:
+    """None values for label, query, limit, batch_size should be omitted."""
+    assert _build_cli_command("discover", _DEFAULT_PARAMS) == "gmail-ingestor discover"
+
+
+def test_build_cli_offset_zero_skipped() -> None:
+    """offset=0 (the default) should be omitted from the command."""
+    params = {**_DEFAULT_PARAMS, "label_id": "INBOX", "offset": 0}
+    result = _build_cli_command("discover", params)
+    assert "--offset" not in result
+
+
+def test_build_cli_offset_nonzero_included() -> None:
+    """Non-zero offset should appear in the command."""
+    params = {**_DEFAULT_PARAMS, "offset": 25}
+    result = _build_cli_command("fetch_pending", params)
+    assert "--offset 25" in result
+
+
+def test_build_cli_full_sync_false_omitted() -> None:
+    """force_full_sync=False should not include --full-sync flag."""
+    params = {**_DEFAULT_PARAMS, "label_id": "INBOX", "force_full_sync": False}
+    result = _build_cli_command("full_fetch", params)
+    assert "--full-sync" not in result
+
+
+def test_build_cli_label_with_spaces_quoted() -> None:
+    """Label values with spaces or commas should be quoted."""
+    params = {**_DEFAULT_PARAMS, "label_id": "INBOX, SENT"}
+    result = _build_cli_command("full_fetch", params)
+    assert '--label "INBOX, SENT"' in result
+
+
+def test_build_cli_query_with_spaces_quoted() -> None:
+    """Query values with spaces should be quoted."""
+    params = {**_DEFAULT_PARAMS, "query": "from:user subject:hello world"}
+    result = _build_cli_command("discover", params)
+    assert '--query "from:user subject:hello world"' in result

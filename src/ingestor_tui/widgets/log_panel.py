@@ -39,6 +39,21 @@ class LogPanelWidget(Vertical):
     LogPanelWidget {
         height: 1fr;
     }
+    LogPanelWidget #command-label {
+        height: 1;
+        padding: 0 1;
+        color: $text-muted;
+    }
+    LogPanelWidget #command-label.active {
+        color: $accent;
+        text-style: bold;
+    }
+    LogPanelWidget #command-label.completed {
+        color: $success;
+    }
+    LogPanelWidget #command-label.error {
+        color: $error;
+    }
     LogPanelWidget RichLog {
         height: 1fr;
         border: solid $surface-lighten-2;
@@ -55,9 +70,11 @@ class LogPanelWidget(Vertical):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._handler: TUILogHandler | None = None
+        self._current_command: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("Command Output", classes="section-title")
+        yield Static("No command running", id="command-label")
         yield RichLog(highlight=True, markup=True, wrap=True, id="log-output")
         with Vertical(classes="log-toolbar"):
             yield Button("Clear", id="btn-clear-log", variant="default")
@@ -80,6 +97,39 @@ class LogPanelWidget(Vertical):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-clear-log":
             self.query_one("#log-output", RichLog).clear()
+
+    def set_command(self, command: str) -> None:
+        """Display the currently running command above the log output."""
+        self._current_command = command
+        label = self.query_one("#command-label", Static)
+        label.update(f"Running: {command}")
+        label.remove_class("completed", "error")
+        label.add_class("active")
+
+    def complete_command(self, status: str = "Completed") -> None:
+        """Update command label to show completion status.
+
+        Swaps the `.active` class for `.completed` or `.error` depending
+        on whether the status indicates a failure.
+        """
+        command = self._current_command or "unknown"
+        label = self.query_one("#command-label", Static)
+        label.update(f"{status}: {command}")
+        label.remove_class("active")
+        # Use error styling for failure/cancellation statuses
+        if status in ("Failed", "Cancelled"):
+            label.remove_class("completed")
+            label.add_class("error")
+        else:
+            label.remove_class("error")
+            label.add_class("completed")
+
+    def clear_command(self) -> None:
+        """Reset the command label to idle state (used by Clear button)."""
+        self._current_command = None
+        label = self.query_one("#command-label", Static)
+        label.update("No command running")
+        label.remove_class("active", "completed", "error")
 
     def write(self, message: str) -> None:
         """Write a message directly to the log panel."""
