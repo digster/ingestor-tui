@@ -40,7 +40,7 @@ class LogPanelWidget(Vertical):
         height: 1fr;
     }
     LogPanelWidget #command-label {
-        height: 1;
+        height: auto;
         padding: 0 1;
         color: $text-muted;
     }
