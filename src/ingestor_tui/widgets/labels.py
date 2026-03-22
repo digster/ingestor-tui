@@ -144,6 +144,12 @@ class LabelsWidget(Vertical):
             self._apply_filter()
             self._update_selection_ui()
 
+    def select_labels(self, label_ids: list[str]) -> None:
+        """Replace the current selection with the given label IDs and refresh UI."""
+        self._selected_ids = set(label_ids)
+        self._apply_filter()
+        self._update_selection_ui()
+
     def set_loading(self, loading: bool) -> None:
         """Toggle the refresh button state."""
         self.query_one("#btn-refresh-labels", Button).disabled = loading

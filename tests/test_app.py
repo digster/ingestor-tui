@@ -285,6 +285,137 @@ async def test_preset_delete_no_selection_warns(project_dir: Path) -> None:
         assert any("select" in str(n.message).lower() for n in app._notifications)
 
 
+# --- Preset load syncs Labels selection ---
+
+
+@pytest.mark.asyncio
+async def test_preset_load_syncs_labels_selection(project_dir: Path, tmp_path: Path) -> None:
+    """Loading a preset should update the Labels widget's _selected_ids."""
+    store = PresetStore(path=tmp_path / "presets.json")
+    store.save_preset("work", "INBOX, SENT")
+
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        ops = app.query_one("#operations", OperationsWidget)
+        ops._preset_store = store
+        ops._refresh_presets()
+        await pilot.pause()
+
+        from textual.widgets import Select
+        select = ops.query_one("#select-preset", Select)
+        select.value = "work"
+        await pilot.pause()
+
+        ops._handle_load()
+        await pilot.pause()
+
+        labels_widget = app.query_one("#labels", LabelsWidget)
+        assert labels_widget._selected_ids == {"INBOX", "SENT"}
+
+
+@pytest.mark.asyncio
+async def test_preset_load_updates_datatable_checkmarks(project_dir: Path, tmp_path: Path) -> None:
+    """Loading a preset should show checkmarks in the Labels DataTable."""
+    store = PresetStore(path=tmp_path / "presets.json")
+    store.save_preset("work", "INBOX, SENT")
+
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        # Populate labels first
+        labels_widget = app.query_one("#labels", LabelsWidget)
+        labels_widget.populate([
+            {"id": "INBOX", "name": "Inbox"},
+            {"id": "SENT", "name": "Sent"},
+            {"id": "TRASH", "name": "Trash"},
+        ])
+        await pilot.pause()
+
+        # Load the preset
+        ops = app.query_one("#operations", OperationsWidget)
+        ops._preset_store = store
+        ops._refresh_presets()
+        await pilot.pause()
+
+        from textual.widgets import DataTable, Select
+        select = ops.query_one("#select-preset", Select)
+        select.value = "work"
+        await pilot.pause()
+
+        ops._handle_load()
+        await pilot.pause()
+
+        # Verify checkmarks in table
+        table = labels_widget.query_one("#labels-table", DataTable)
+        inbox_check = table.get_cell("INBOX", "col-check")
+        sent_check = table.get_cell("SENT", "col-check")
+        trash_check = table.get_cell("TRASH", "col-check")
+        assert inbox_check == "\u2713"
+        assert sent_check == "\u2713"
+        assert trash_check == ""
+
+
+@pytest.mark.asyncio
+async def test_preset_load_replaces_previous_selection(project_dir: Path, tmp_path: Path) -> None:
+    """Loading a preset should replace any prior label selection, not merge."""
+    store = PresetStore(path=tmp_path / "presets.json")
+    store.save_preset("work", "SENT")
+
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        # Pre-select INBOX manually
+        labels_widget = app.query_one("#labels", LabelsWidget)
+        labels_widget._selected_ids = {"INBOX", "TRASH"}
+
+        # Load a preset with only SENT
+        ops = app.query_one("#operations", OperationsWidget)
+        ops._preset_store = store
+        ops._refresh_presets()
+        await pilot.pause()
+
+        from textual.widgets import Select
+        select = ops.query_one("#select-preset", Select)
+        select.value = "work"
+        await pilot.pause()
+
+        ops._handle_load()
+        await pilot.pause()
+
+        # Old selection should be gone, only preset labels remain
+        assert labels_widget._selected_ids == {"SENT"}
+
+
+@pytest.mark.asyncio
+async def test_preset_load_updates_selection_count(project_dir: Path, tmp_path: Path) -> None:
+    """Loading a preset should update the selection count badge and enable buttons."""
+    store = PresetStore(path=tmp_path / "presets.json")
+    store.save_preset("work", "INBOX, SENT")
+
+    app = IngestorApp(project_dir)
+    async with app.run_test(size=(120, 40)) as pilot:
+        ops = app.query_one("#operations", OperationsWidget)
+        ops._preset_store = store
+        ops._refresh_presets()
+        await pilot.pause()
+
+        from textual.widgets import Select
+        select = ops.query_one("#select-preset", Select)
+        select.value = "work"
+        await pilot.pause()
+
+        ops._handle_load()
+        await pilot.pause()
+
+        labels_widget = app.query_one("#labels", LabelsWidget)
+        count_label = labels_widget.query_one("#labels-selection-count", Static)
+        assert "2 selected" in str(count_label._Static__content)
+
+        # Copy and Clear buttons should be enabled
+        copy_btn = labels_widget.query_one("#btn-copy-labels")
+        clear_btn = labels_widget.query_one("#btn-clear-selection")
+        assert copy_btn.disabled is False
+        assert clear_btn.disabled is False
+
+
 # --- Full Sync checkbox tests ---
 
 

@@ -30,6 +30,14 @@ class OperationCompleted(Message):
         super().__init__()
 
 
+class PresetLoaded(Message):
+    """Posted when a label preset is loaded, so the Labels widget can sync."""
+
+    def __init__(self, label_ids: list[str]) -> None:
+        self.label_ids = label_ids
+        super().__init__()
+
+
 class OperationsWidget(Vertical):
     """Pipeline operation controls with parameter inputs and progress display."""
 
@@ -163,6 +171,9 @@ class OperationsWidget(Vertical):
         labels = self._preset_store.get_preset(str(select.value))
         if labels is not None:
             self.query_one("#input-label", Input).value = labels
+            # Sync Labels widget selection with preset labels
+            label_ids = [s.strip() for s in labels.split(",") if s.strip()]
+            self.post_message(PresetLoaded(label_ids))
             self.notify(f"Loaded preset '{select.value}'")
 
     @work

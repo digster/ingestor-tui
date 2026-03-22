@@ -23,7 +23,7 @@ from ingestor_tui.widgets.confirm_dialog import ConfirmDialog
 from ingestor_tui.widgets.dashboard import DashboardWidget
 from ingestor_tui.widgets.labels import LabelsSelected, LabelsWidget
 from ingestor_tui.widgets.log_panel import LogPanelWidget
-from ingestor_tui.widgets.operations import OperationsWidget
+from ingestor_tui.widgets.operations import OperationsWidget, PresetLoaded
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +250,10 @@ class IngestorApp(App):
         self.action_switch_tab("tab-operations")
         count = len(event.label_ids)
         self.notify(f"Copied {count} label{'s' if count != 1 else ''} to Operations")
+
+    def on_preset_loaded(self, event: PresetLoaded) -> None:
+        """Sync Labels widget selection when a preset is loaded in Operations."""
+        self.query_one("#labels", LabelsWidget).select_labels(event.label_ids)
 
     def action_switch_tab(self, tab_id: str) -> None:
         self.query_one("#tabs", TabbedContent).active = tab_id
