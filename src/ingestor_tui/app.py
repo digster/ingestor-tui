@@ -253,7 +253,11 @@ class IngestorApp(App):
 
     def on_preset_loaded(self, event: PresetLoaded) -> None:
         """Sync Labels widget selection when a preset is loaded in Operations."""
-        self.query_one("#labels", LabelsWidget).select_labels(event.label_ids)
+        labels_widget = self.query_one("#labels", LabelsWidget)
+        labels_widget.select_labels(event.label_ids)
+        # Auto-refresh labels from Gmail if table hasn't been populated yet
+        if not labels_widget._all_labels:
+            self._run_labels_refresh()
 
     def action_switch_tab(self, tab_id: str) -> None:
         self.query_one("#tabs", TabbedContent).active = tab_id
