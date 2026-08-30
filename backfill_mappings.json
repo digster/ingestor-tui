@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "mappings": {
+    "Joan Westenberg": {
+      "label_id": "Label_1282196755308728004",
+      "archive_url": "https://www.joanwestenberg.com/archive",
+      "sender": "JA Westenberg <jawestenberg@substack.com>",
+      "listing": {
+        "mode": "json",
+        "url_template": "https://www.joanwestenberg.com/api/v1/archive?sort=new&offset={offset}&limit={limit}",
+        "pagination": {
+          "type": "offset",
+          "page_size": 50,
+          "start": 0,
+          "max_pages": 40
+        },
+        "items_path": "",
+        "fields": {
+          "url": "canonical_url",
+          "title": "title",
+          "date": "post_date"
+        }
+      },
+      "article": {
+        "content_selector": "div.available-content",
+        "title_selector": "h1",
+        "date_selector": "time[datetime]",
+        "date_attr": "datetime"
+      },
+      "notes": "Substack. Author migrated ghost.io -> beehiiv -> substack; email delivery stopped after 2026-06-06, so everything from 2026-08 onward is web-only. Mode is 'json' because the HTML archive is infinite-scroll: it server-renders only 12 posts and IGNORES ?offset= (verified: page 2 returns page 1, new_on_page_2=0). The /api/v1/archive endpoint paginates correctly."
+    }
+  }
+}

@@ -19,6 +19,11 @@ from gmail_ingestor.core.exceptions import RateLimitError
 from gmail_ingestor.core.models import FetchProgress
 from gmail_ingestor.pipeline.ingestor import EmailIngestor
 
+from ingestor_tui.backfill.mappings import MappingError, MappingStore
+from ingestor_tui.backfill.models import BackfillProgress
+from ingestor_tui.backfill.runner import BackfillRunner
+from ingestor_tui.backfill.store import BackfillTracker
+from ingestor_tui.widgets.backfill import BackfillRequested, BackfillWidget
 from ingestor_tui.widgets.confirm_dialog import ConfirmDialog
 from ingestor_tui.widgets.dashboard import DashboardWidget
 from ingestor_tui.widgets.labels import LabelsSelected, LabelsWidget
@@ -34,7 +39,14 @@ _OPERATION_CLI_COMMANDS: dict[str, str] = {
     "fetch_pending": "fetch-pending",
     "convert_pending": "convert-pending",
     "retry_failed": "retry",
+    # Backfill runs through a different console script, so its display string
+    # carries that program name rather than "gmail-ingestor".
+    "backfill_scan": "scan",
+    "backfill_run": "run",
 }
+
+# Operations served by the ingestor-backfill CLI rather than gmail-ingestor.
+_BACKFILL_OPERATIONS = frozenset({"backfill_scan", "backfill_run"})
 
 # Defines which CLI flags each operation supports
 _OPERATION_CLI_FLAGS: dict[str, list[str]] = {
@@ -43,6 +55,8 @@ _OPERATION_CLI_FLAGS: dict[str, list[str]] = {
     "fetch_pending": ["limit", "offset", "batch_size"],
     "convert_pending": ["limit", "offset", "batch_size"],
     "retry_failed": [],
+    "backfill_scan": ["label_name", "limit"],
+    "backfill_run": ["label_name", "limit", "dry_run"],
 }
 
 # Maps param keys to their CLI flag format
@@ -53,6 +67,8 @@ _PARAM_TO_FLAG: dict[str, str] = {
     "limit": "--limit",
     "offset": "--offset",
     "batch_size": "--batch-size",
+    "label_name": "--label",
+    "dry_run": "--dry-run",
 }
 
 
@@ -62,13 +78,14 @@ def _build_cli_command(operation: str, params: dict) -> str:
     Only includes flags with non-default values (skips None, False, offset=0).
     """
     subcommand = _OPERATION_CLI_COMMANDS.get(operation, operation)
-    parts = [f"gmail-ingestor {subcommand}"]
+    program = "ingestor-backfill" if operation in _BACKFILL_OPERATIONS else "gmail-ingestor"
+    parts = [f"{program} {subcommand}"]
 
     for key in _OPERATION_CLI_FLAGS.get(operation, []):
         value = params.get(key)
         flag = _PARAM_TO_FLAG[key]
 
-        if key == "force_full_sync":
+        if key in ("force_full_sync", "dry_run"):
             # Boolean flag — only include when True
             if value:
                 parts.append(flag)
@@ -132,6 +149,7 @@ class IngestorApp(App):
         Binding("d", "switch_tab('tab-dashboard')", "Dashboard", show=True),
         Binding("l", "switch_tab('tab-labels')", "Labels", show=True),
         Binding("o", "switch_tab('tab-operations')", "Operations", show=True),
+        Binding("b", "switch_tab('tab-backfill')", "Backfill", show=True),
         Binding("g", "switch_tab('tab-log')", "Log", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
@@ -142,6 +160,7 @@ class IngestorApp(App):
         self._settings: GmailIngestorSettings | None = None
         self._ingestor: EmailIngestor | None = None
         self._refresh_timer = None
+        self._mapping_store = MappingStore()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -152,6 +171,8 @@ class IngestorApp(App):
                 yield LabelsWidget(id="labels")
             with TabPane("Operations", id="tab-operations"):
                 yield OperationsWidget(id="operations")
+            with TabPane("Backfill", id="tab-backfill"):
+                yield BackfillWidget(id="backfill")
             with TabPane("Log", id="tab-log"):
                 yield LogPanelWidget(id="log-panel")
         yield Footer()
@@ -189,6 +210,7 @@ class IngestorApp(App):
             logger.error("Failed to load settings: %s", e)
             self.notify(f"Settings error: {e}", severity="error")
 
+        self._load_mappings()
         self._refresh_timer = self.set_interval(5.0, self._auto_refresh_dashboard)
 
     def _auto_refresh_dashboard(self) -> None:
@@ -296,6 +318,10 @@ class IngestorApp(App):
             self._cancel_operation()
         elif button_id == "btn-refresh-labels":
             self._run_labels_refresh()
+        elif button_id == "btn-backfill-reload":
+            self._load_mappings()
+        elif button_id == "btn-backfill-stop":
+            self._cancel_operation()
         elif button_id == "btn-apply-project-dir":
             self._apply_project_dir()
 
@@ -493,6 +519,179 @@ class IngestorApp(App):
             self.call_from_thread(
                 self.query_one("#dashboard", DashboardWidget).refresh_status
             )
+
+    # --- Backfill ---
+
+    def _load_mappings(self) -> None:
+        """Load backfill mappings and their per-label state into the widget.
+
+        Runs on the main thread: reading a small JSON file and a local SQLite
+        table is fast, and doing it inline keeps the tab populated from mount
+        without a worker round-trip.
+        """
+        widget = self.query_one("#backfill", BackfillWidget)
+        try:
+            mappings = self._mapping_store.list_mappings()
+        except MappingError as e:
+            logger.error("Could not load backfill mappings: %s", e)
+            self.notify(f"Mapping error: {e}", severity="error")
+            widget.populate_mappings({})
+            return
+
+        state: dict[str, dict[str, int]] = {}
+        if self._settings is not None:
+            db_path = BackfillTracker.beside(self._settings.database_path).path
+            if db_path.exists():
+                try:
+                    with BackfillTracker(db_path) as tracker:
+                        state = {name: tracker.count_by_status(name) for name in mappings}
+                except Exception as e:
+                    logger.warning("Could not read backfill state: %s", e)
+
+        widget.populate_mappings(mappings, state)
+
+    def on_backfill_requested(self, event: BackfillRequested) -> None:
+        """Scan runs immediately; a real backfill asks first."""
+        if event.operation == "scan":
+            self._start_backfill(event.label_name, scan_only=True)
+            return
+
+        params = self.query_one("#backfill", BackfillWidget).get_params()
+        if params["dry_run"]:
+            # A dry run writes nothing, so there is nothing to confirm.
+            self._start_backfill(event.label_name, scan_only=False)
+            return
+
+        limit = params["limit"]
+        scope = f"up to {limit} article(s)" if limit else "all missing articles"
+        self.push_screen(
+            ConfirmDialog(
+                f"Backfill [bold]{event.label_name}[/bold] ({scope})?\n"
+                "This writes new files into the output directory."
+            ),
+            callback=lambda confirmed, label=event.label_name: (
+                self._start_backfill(label, scan_only=False) if confirmed else None
+            ),
+        )
+
+    def _start_backfill(self, label_name: str, *, scan_only: bool) -> None:
+        """Prepare the UI and dispatch the backfill worker."""
+        if self._settings is None:
+            self.notify("Settings not loaded — cannot backfill", severity="error")
+            return
+
+        widget = self.query_one("#backfill", BackfillWidget)
+        widget.set_running(True)
+        widget.reset_progress()
+
+        params = widget.get_params()
+        operation = "backfill_scan" if scan_only else "backfill_run"
+        cli_command = _build_cli_command(operation, {**params, "label_name": label_name})
+        self.query_one("#log-panel", LogPanelWidget).set_command(cli_command)
+
+        self._do_backfill(label_name, scan_only, params["limit"], params["dry_run"])
+
+    def _on_backfill_progress(self, progress: BackfillProgress) -> None:
+        """Progress callback — called from the worker thread."""
+        widget = self.query_one("#backfill", BackfillWidget)
+        stage = progress.current_stage
+
+        if stage == "listing":
+            self.call_from_thread(widget.update_progress, "Reading archive")
+        elif stage == "matching":
+            self.call_from_thread(
+                widget.update_progress, "Matching against corpus", 0, 0
+            )
+        elif stage == "fetching":
+            done = progress.articles_written + progress.articles_failed
+            title = progress.current_title
+            label = f"Fetching — {title[:48]}" if title else "Fetching"
+            self.call_from_thread(
+                widget.update_progress, label, done, progress.articles_missing
+            )
+        elif stage == "complete":
+            if progress.articles_written or progress.articles_failed:
+                done = progress.articles_written + progress.articles_failed
+                self.call_from_thread(widget.update_progress, "Complete", done, done)
+            else:
+                # A scan writes nothing, so a progress ratio would read "0/1".
+                # Report what was actually learned instead.
+                self.call_from_thread(
+                    widget.update_progress,
+                    f"Complete — {progress.articles_missing} missing "
+                    f"of {progress.articles_listed}",
+                )
+
+    @work(thread=True, exclusive=True, group="pipeline")
+    def _do_backfill(
+        self, label_name: str, scan_only: bool, limit: int | None, dry_run: bool
+    ) -> None:
+        """Run a scan or a backfill in a worker thread.
+
+        Shares the "pipeline" worker group with the Gmail operations so the
+        existing Stop button and _cancel_operation() apply unchanged, and so a
+        backfill can never run concurrently with an ingest.
+        """
+        widget = self.query_one("#backfill", BackfillWidget)
+        log_panel = self.query_one("#log-panel", LogPanelWidget)
+        worker = get_current_worker()
+
+        try:
+            runner = BackfillRunner(
+                self._settings,
+                mapping_store=self._mapping_store,
+                on_progress=self._on_backfill_progress,
+                should_stop=lambda: worker.is_cancelled,
+            )
+
+            action = "scan" if scan_only else ("dry run" if dry_run else "backfill")
+            self.call_from_thread(
+                log_panel.write, f"\n[bold]Starting {action}: {label_name}[/bold]"
+            )
+
+            if scan_only:
+                entries = runner.scan(label_name, limit=limit)
+                self.call_from_thread(widget.populate_scan, entries)
+                missing = sum(1 for e in entries if e.is_missing)
+                self.call_from_thread(
+                    log_panel.write,
+                    f"[green]Scanned {len(entries)} articles — "
+                    f"{len(entries) - missing} held, {missing} missing[/green]",
+                )
+            else:
+                result = runner.run(label_name, limit=limit, dry_run=dry_run)
+                self.call_from_thread(widget.populate_scan, list(result.entries))
+                if result.dry_run:
+                    self.call_from_thread(
+                        log_panel.write,
+                        f"[yellow]Dry run — would backfill {result.selected} "
+                        f"of {result.listed} listed[/yellow]",
+                    )
+                else:
+                    self.call_from_thread(
+                        log_panel.write,
+                        f"[green]Backfilled {result.written} article(s), "
+                        f"{result.failed} failed[/green]",
+                    )
+                self.call_from_thread(self._load_mappings)
+
+            if worker.is_cancelled:
+                self.call_from_thread(log_panel.complete_command, "Cancelled")
+            else:
+                self.call_from_thread(log_panel.complete_command)
+                self.call_from_thread(
+                    self.notify, f"Backfill {action} completed", severity="information"
+                )
+
+        except Exception as e:
+            self.call_from_thread(log_panel.write, f"[red bold]Error: {e}[/red bold]")
+            self.call_from_thread(self.notify, f"Backfill error: {e}", severity="error")
+            self.call_from_thread(log_panel.complete_command, "Failed")
+            action_name = "scan" if scan_only else "run"
+            logger.exception("Backfill %s failed for %s", action_name, label_name)
+
+        finally:
+            self.call_from_thread(widget.set_running, False)
 
     @work(thread=True, exclusive=True, group="labels")
     def _run_labels_refresh(self) -> None:

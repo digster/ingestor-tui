@@ -82,6 +82,47 @@ class DBReader:
         finally:
             conn.close()
 
+    def get_messages_for_label(self, label_id: str) -> list[dict]:
+        """Get every message carrying a label, for backfill gap detection.
+
+        Joins through `message_labels` rather than filtering `messages.label_id`:
+        the latter records only the label a message was *discovered* under, so a
+        newsletter found via INBOX would be invisible to a per-label query.
+        """
+        if not self.exists:
+            return []
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT m.message_id, m.subject, m.date "
+                "FROM messages m "
+                "JOIN message_labels ml ON ml.message_id = m.message_id "
+                "WHERE ml.label_id = ? "
+                "ORDER BY m.date DESC",
+                (label_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.OperationalError:
+            # message_labels may not exist on an older database
+            return []
+        finally:
+            conn.close()
+
+    def get_label_id(self, label_name: str) -> str | None:
+        """Resolve a Gmail label name to its ID, or None if unknown."""
+        if not self.exists:
+            return None
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT label_id FROM labels WHERE label_name = ?", (label_name,)
+            ).fetchone()
+            return row["label_id"] if row else None
+        except sqlite3.OperationalError:
+            return None
+        finally:
+            conn.close()
+
     def get_recent_messages(self, limit: int = 20) -> list[dict]:
         """Get recently updated messages."""
         if not self.exists:

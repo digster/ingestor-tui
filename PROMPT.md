@@ -43,3 +43,7 @@ Persist command name after operation completes: Replace clear_command() in _do_o
 ## 2026-03-14 (Session 3)
 
 Show CLI command in log panel label: Instead of showing just the operation name (e.g., "discover"), the command label now shows the full CLI command (e.g., "gmail-ingestor discover --label INBOX --limit 100"). Added _build_cli_command() helper with operation-to-subcommand mapping, per-operation flag lists, and smart defaults (skips None, False, offset=0, quotes values with spaces/commas).
+
+## 2026-08-30
+
+Add a newsletter backfill feature: a mapping file in this project associates a label with an archive listing URL and DOM selectors (authored by an LLM that analyses the listing page); a new TUI screen runs the backfill for any mapped label, matching archive articles against what already exists and writing the gaps into ../output in the same format and structure the downstream pipeline expects. Flag any DB or format impact. Example: the Joan Westenberg label, where the author moved to Substack and we are missing the newer articles — archive listing https://www.joanwestenberg.com/archive

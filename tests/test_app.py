@@ -36,7 +36,7 @@ async def test_app_mounts(project_dir: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_tabs_exist(project_dir: Path) -> None:
-    """All four tabs should be present."""
+    """All five tabs should be present."""
     app = IngestorApp(project_dir)
     async with app.run_test(size=(120, 40)) as pilot:
         tabs = app.query("TabPane")
@@ -45,11 +45,16 @@ async def test_tabs_exist(project_dir: Path) -> None:
         assert "tab-operations" in tab_ids
         assert "tab-labels" in tab_ids
         assert "tab-log" in tab_ids
+        assert "tab-backfill" in tab_ids
 
 
 @pytest.mark.asyncio
 async def test_tab_order(project_dir: Path) -> None:
-    """Tabs should be ordered: Dashboard, Labels, Operations, Log."""
+    """Tabs: Dashboard, Labels, Operations, Backfill, Log.
+
+    Backfill sits before Log because Log is the terminal/output tab that every
+    other tab hands off to.
+    """
     app = IngestorApp(project_dir)
     async with app.run_test(size=(120, 40)) as pilot:
         tabs = list(app.query("TabPane"))
@@ -58,6 +63,7 @@ async def test_tab_order(project_dir: Path) -> None:
             "tab-dashboard",
             "tab-labels",
             "tab-operations",
+            "tab-backfill",
             "tab-log",
         ]
 
@@ -655,3 +661,38 @@ def test_build_cli_query_with_spaces_quoted() -> None:
     params = {**_DEFAULT_PARAMS, "query": "from:user subject:hello world"}
     result = _build_cli_command("discover", params)
     assert '--query "from:user subject:hello world"' in result
+
+
+# --- Backfill CLI command strings ---
+
+
+def test_build_cli_command_backfill_scan() -> None:
+    """Backfill commands name the ingestor-backfill program, not gmail-ingestor."""
+    result = _build_cli_command(
+        "backfill_scan", {"label_name": "Joan Westenberg", "limit": 5}
+    )
+    assert result == 'ingestor-backfill scan --label "Joan Westenberg" --limit 5'
+
+
+def test_build_cli_command_backfill_run_dry() -> None:
+    result = _build_cli_command(
+        "backfill_run", {"label_name": "Example", "limit": None, "dry_run": True}
+    )
+    assert result == "ingestor-backfill run --label Example --dry-run"
+
+
+def test_build_cli_command_backfill_run_omits_false_dry_run() -> None:
+    result = _build_cli_command(
+        "backfill_run", {"label_name": "Example", "limit": 2, "dry_run": False}
+    )
+    assert result == "ingestor-backfill run --label Example --limit 2"
+
+
+def test_build_cli_command_gmail_program_unchanged() -> None:
+    """Adding backfill must not change how Gmail commands render."""
+    result = _build_cli_command(
+        "full_fetch",
+        {"label_id": "INBOX", "query": None, "limit": 10, "offset": 0,
+         "batch_size": None, "force_full_sync": True},
+    )
+    assert result == "gmail-ingestor fetch --label INBOX --full-sync --limit 10"

@@ -7,6 +7,18 @@ requires-python = ">=3.12"
 dependencies = [
     "gmail-ingestor",
     "textual>=1.0.0",
+    # Backfill scraping. requests + lxml already arrive transitively via
+    # trafilatura, but backfill imports them directly so they are declared here.
+    "requests>=2.32.0",
+    "lxml>=5.0.0",
+    "cssselect>=1.2.0",
+]
+
+[project.optional-dependencies]
+# Headless-browser listing mode ("rendered"), for JS-only archives that expose
+# no JSON listing endpoint. Kept optional: playwright pulls a ~400MB browser.
+rendered = [
+    "playwright>=1.40.0",
 ]
 
 [tool.uv.sources]
@@ -14,6 +26,7 @@ gmail-ingestor = { path = "../gmail-ingestor", editable = true }
 
 [project.scripts]
 ingestor-tui = "ingestor_tui.app:main"
+ingestor-backfill = "ingestor_tui.backfill.cli:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -39,4 +52,7 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
     "textual-dev>=1.0.0",
+    # Test-only: asserts backfilled front matter parses the same way
+    # ingestor-tools parses it (yaml.safe_load). Not used in production code.
+    "pyyaml>=6.0.0",
 ]
