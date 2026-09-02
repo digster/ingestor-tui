@@ -43,14 +43,24 @@ class ArticleConfig:
     title_selector: str = ""
     date_selector: str = ""
     date_attr: str = "datetime"
+    # Chrome to remove from the extracted content subtree. Empty means "use
+    # extractor.DEFAULT_STRIP_SELECTORS" — resolved there rather than here so
+    # mappings.py stays free of an import back from extractor.py. Override for
+    # a publication whose real content uses <button> or form controls.
+    strip_selectors: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ArticleConfig:
+        strip = data.get("strip_selectors") or ()
+        if isinstance(strip, str) or not isinstance(strip, (list, tuple)):
+            raise MappingError("article.strip_selectors must be a list of CSS selectors")
+
         return cls(
             content_selector=str(data.get("content_selector", "")),
             title_selector=str(data.get("title_selector", "")),
             date_selector=str(data.get("date_selector", "")),
             date_attr=str(data.get("date_attr", "datetime")),
+            strip_selectors=tuple(str(s) for s in strip),
         )
 
 

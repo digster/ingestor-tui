@@ -9,6 +9,7 @@ starting the TUI.
     ingestor-backfill validate           check the mapping file
     ingestor-backfill scan --label X     classify entries, no writes
     ingestor-backfill run --label X      backfill the missing articles
+    ingestor-backfill prune --label X    remove what a previous backfill wrote
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from ingestor_tui.backfill.fetcher import DEFAULT_DELAY_SECONDS, Fetcher
 from ingestor_tui.backfill.mappings import MappingError, MappingStore
 from ingestor_tui.backfill.models import ScanEntry
 from ingestor_tui.backfill.probe import probe, verify_pagination
+from ingestor_tui.backfill.prune import DEFAULT_NEWSLETTERS_DIR, prune_label
 from ingestor_tui.backfill.runner import BackfillRunner
 from ingestor_tui.backfill.store import BackfillTracker
 from ingestor_tui.db_reader import DBReader
@@ -32,6 +34,10 @@ from ingestor_tui.db_reader import DBReader
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROJECT_DIR = Path("../gmail-ingestor")
+
+# A prune is reviewed by eye before it is applied, so the preview stays short
+# enough to read in one screen. Mirrors _print_entries' own cap.
+_PRUNE_PREVIEW_LIMIT = 40
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -127,6 +133,29 @@ def _build_parser() -> argparse.ArgumentParser:
                 help="Report what would be written without touching disk",
             )
         sub.set_defaults(handler=_cmd_scan if name == "scan" else _cmd_run)
+
+    prune_parser = subparsers.add_parser(
+        "prune",
+        help="Remove a label's backfilled articles from output/, newsletters/ and the DB",
+    )
+    prune_parser.add_argument("--label", "-l", required=True, help="Label to prune")
+    prune_parser.add_argument(
+        "--newsletters-dir",
+        type=Path,
+        default=DEFAULT_NEWSLETTERS_DIR,
+        help=(
+            "Root of the organised tree ingestor-tools writes "
+            f"(default: {DEFAULT_NEWSLETTERS_DIR}, relative to --project-dir)"
+        ),
+    )
+    # Destructive and unattended-capable, so the safe mode is the default and
+    # deleting takes an explicit flag — the inverse of `run --dry-run`.
+    prune_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Actually delete. Without this the command only reports.",
+    )
+    prune_parser.set_defaults(handler=_cmd_prune)
 
     return parser
 
@@ -313,6 +342,50 @@ def _cmd_run(args: argparse.Namespace) -> int:
     else:
         print(f"Backfilled {result.written} of {result.selected} selected, "
               f"{result.failed} failed")
+    return 0
+
+
+def _cmd_prune(args: argparse.Namespace) -> int:
+    settings = _settings(args)
+    result = prune_label(
+        settings,
+        args.label,
+        newsletters_dir=args.newsletters_dir,
+        dry_run=not args.yes,
+    )
+
+    if not result.targets:
+        print(f"{args.label}: nothing backfilled — nothing to prune")
+        return 0
+
+    verb = "Would remove" if result.dry_run else "Removed"
+    print(f"\n{result.label}: {len(result.targets)} backfilled article(s)\n")
+
+    for target in result.targets[:_PRUNE_PREVIEW_LIMIT]:
+        # "?" flags a row whose files are already gone — a partially applied
+        # prune, or a manual deletion. The row is still cleared.
+        marker = "  " if target.is_present else "? "
+        date = target.published_at or "----------"
+        print(f"{marker}{date}  {target.status:10s} {target.article_id}  {target.title[:52]}")
+
+    remaining = len(result.targets) - _PRUNE_PREVIEW_LIMIT
+    if remaining > 0:
+        print(f"  ... and {remaining} more")
+
+    print(
+        f"\n{verb}: {result.files_removed} file(s), "
+        f"{result.directories_removed} newsletter director(ies), "
+        f"{result.rows_removed} database row(s)"
+    )
+
+    if result.dry_run:
+        print("\nDRY RUN — nothing was deleted. Re-run with --yes to apply.")
+    else:
+        print(
+            "\nNext: `ingestor-backfill run --label "
+            f'"{result.label}"`, then re-run the ingestor-tools organizer and '
+            "newsletters-web's build_site.py."
+        )
     return 0
 
 

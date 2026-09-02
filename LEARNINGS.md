@@ -106,3 +106,86 @@ path and errors on the near side. Any helper that might be reached from either t
 check. Note also how this hid: a logging handler that raises gets swallowed by
 `handleError`, so the app kept running and only stderr showed the problem. Tests that assert
 on the widget's contents would have passed.
+
+## The rendered artifact is the raw HTML, not the markdown
+
+**Symptom:** Backfilled articles rendered as full-bleed images and edge-to-edge text with
+stray icon glyphs, while ingested emails in the same list looked right — even though backfill
+deliberately reused gmail-ingestor's `MarkdownConverter`, `MarkdownWriter` and `RawEmailStore`
+specifically so its output would match.
+
+**Cause:** It reused them faithfully and matched the wrong file. `newsletters-web`'s build
+picks `sorted(glob("*.html"))[0]` as the article body and reads the `.md` only for
+front-matter metadata. The `.md` is a sidecar; `../output/raw/{id}.html` is what people see.
+
+The deeper reason the mismatch was invisible: an email and a web page store their styling in
+opposite places.
+
+* Mail clients strip `<link rel="stylesheet">`, so senders are **forced** to inline
+  everything — a `<style>` block plus `style=""` on every element. An email is self-describing
+  by necessity, which is why `RawEmailStore`'s verbatim copy survives an iframe with no CSS.
+* A web page keeps its styling in external CDN stylesheets. Storing the content subtree
+  preserved the styling *reference* and lost the styling itself.
+
+So backfill was saving HTML all along. It was saving HTML that could not stand on its own.
+
+**Fix:** `extractor._wrap_document` emits a complete document with `ARTICLE_PAGE_CSS` inlined,
+mirroring `EMAIL_PAGE_CSS` in `newsletters-web/scripts/build_site.py` — which already does
+exactly this for emails that arrived without an HTML part. Element-level selectors only, so
+any inline style that did survive still wins: a floor, not an override.
+
+**Rule:** Reusing a producer's writer proves the *format* matches. It proves nothing about how
+the output renders. Before claiming downstream parity, find the file the consumer actually
+opens and compare that one. And ask what a format depends on that you are not storing.
+
+**Corollary — `include_links=True` is not the same as "it has HTML".** Trafilatura runs with
+`output_format="txt"` in this project, so no `.md` in `../output/markdown` contains a tag.
+Both pipelines' markdown already matched; only the raw HTML ever differed.
+
+
+## An upsert can silently downgrade a status that means "files exist"
+
+**Symptom:** `prune` left two backfilled articles behind. Their files were on disk with
+`origin: backfill` front matter, but `backfill.db` said `have` — a status that means "a Gmail
+message already covers this URL", which owns no files at all.
+
+**Cause:** `classify` reports an already-backfilled URL as `have` with reason
+`"already backfilled"` (correct — it stops a re-scrape). `runner._write_missing` then calls
+`_record()` for **every** classified entry, and `record_article`'s `ON CONFLICT` did
+`status = excluded.status`. So the second scan overwrote `done` — losing `raw_html_path` and
+`markdown_path` with it.
+
+The article then churned: `done` → `have` (row overwritten) → `discovered` (no longer in
+`completed_urls`, and the Gmail corpus does not hold it) → re-fetched → `done`. Repeat.
+
+**Fix:** the upsert defers to `done` rather than overwriting it:
+
+```sql
+status = CASE WHEN backfill_articles.status = 'done' THEN 'done' ELSE excluded.status END
+```
+
+`mark_done` / `mark_failed` still set the status outright — only the classification upsert
+backs off. `prune` additionally treats **files on disk as authoritative over status**, so
+rows already damaged by the old behaviour are still cleaned up.
+
+**Rule:** When a status asserts something about the filesystem, an upsert driven by
+*classification* must not be allowed to overwrite it. Classification is a guess about the
+world; `done` is a fact about the disk.
+
+
+## `ingestor-tools` copies but never overwrites
+
+**Symptom:** A corrected file in `../output/raw/` did not reach the site. The build ran, the
+organizer ran, and the stale version was still published.
+
+**Cause:** `newsletter_organizer.organize()` is idempotent by *skipping* — files already
+present in the destination are not copied — and it never deletes. So `../newsletters/` is
+write-once per path, and it is what `newsletters-web` builds from.
+
+**Fix:** `ingestor-backfill prune --label X` clears all four locations (both `../output`
+files, the `../newsletters/<label>/<id>/` directory, and the database rows) so a normal
+`run` + organize + build regenerates them.
+
+**Rule:** Changing how a file is *generated* is only half the job when a downstream copier
+skips existing paths. Anything that regenerates output into this pipeline needs a way to
+invalidate `../newsletters/` too, or the fix stops at `../output/`.

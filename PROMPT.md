@@ -47,3 +47,16 @@ Show CLI command in log panel label: Instead of showing just the operation name 
 ## 2026-08-30
 
 Add a newsletter backfill feature: a mapping file in this project associates a label with an archive listing URL and DOM selectors (authored by an LLM that analyses the listing page); a new TUI screen runs the backfill for any mapped label, matching archive articles against what already exists and writing the gaps into ../output in the same format and structure the downstream pipeline expects. Flag any DB or format impact. Example: the Joan Westenberg label, where the author moved to Substack and we are missing the newer articles — archive listing https://www.joanwestenberg.com/archive
+
+## 2026-09-02
+
+- we recently added a backfill feature
+- based on it I tried backfilling for a label - Joan Westenberg
+- Problem is, originally, the markdown in ../output actually contains html content(through trafilatura in ../gmail-ingestor) which is ported to ../newsletters as html files by ../ingestor-tools
+- however, the backfill content is just raw content and looks odd(check the latest Joan Westenberg articles in ../output and ../newsletters and any article on https://digster.github.io/newsletters-web/newsletter.html?name=Joan%20Westenberg after 6th June)
+- i was under the impression while implementing the backfill feature that the format in ../output was matched so that everything downstream would work appropriately
+- we need to fix this, suggest solutions
+
+Follow-up: "Yes, you are right about Trafilatura and the html connection, my bad. So, Why did
+the backfill content not have the HTML like our other emails? And how are we fixing that? Are
+we gonna have a fallback style?"

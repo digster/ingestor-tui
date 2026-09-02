@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from ingestor_tui.backfill.mappings import (
+    ArticleConfig,
     BackfillMapping,
     ListingConfig,
     MappingError,
@@ -176,3 +177,23 @@ def test_file_is_written_as_readable_json(store: MappingStore) -> None:
     assert data["version"] == 1
     assert "Example" in data["mappings"]
     assert store.path.read_text().endswith("\n")
+
+
+# --- article.strip_selectors ---
+
+
+def test_strip_selectors_default_to_empty_meaning_the_extractor_default() -> None:
+    """Resolved in extractor.py, not here — mappings.py must not import back
+    from a module that already imports it."""
+    assert ArticleConfig.from_dict({}).strip_selectors == ()
+
+
+def test_strip_selectors_are_parsed_into_a_tuple() -> None:
+    config = ArticleConfig.from_dict({"strip_selectors": ["script", "aside"]})
+    assert config.strip_selectors == ("script", "aside")
+
+
+def test_a_bare_string_of_selectors_is_rejected() -> None:
+    """"button, svg" would otherwise iterate character by character."""
+    with pytest.raises(MappingError, match="strip_selectors"):
+        ArticleConfig.from_dict({"strip_selectors": "button, svg"})

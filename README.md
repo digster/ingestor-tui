@@ -63,11 +63,28 @@ uv run ingestor-backfill probe <url>              # analyse an archive page
 uv run ingestor-backfill list                     # mappings and their state
 uv run ingestor-backfill validate                 # check the mapping file
 uv run ingestor-backfill scan --label "Name"      # what's missing (no writes)
-uv run ingestor-backfill run  --label "Name"      # fetch and write the gaps
+uv run ingestor-backfill run   --label "Name"     # fetch and write the gaps
+uv run ingestor-backfill prune --label "Name"     # remove what a previous run wrote
 ```
 
 `run` accepts `--limit N` to cap what is written, `--dry-run` to report without touching
 disk, `--delay` to change the inter-request pause (default 1s), and `--ignore-robots`.
+
+`prune` reports by default and needs `--yes` to delete. It clears all four places a
+backfilled article lives — the markdown, the raw HTML, the `../newsletters/<label>/<id>/`
+directory and the `backfill.db` row — so a following `run` regenerates them cleanly:
+
+```bash
+uv run ingestor-backfill prune --label "Name"          # preview
+uv run ingestor-backfill prune --label "Name" --yes    # apply
+uv run ingestor-backfill run   --label "Name"
+# then: ingestor-tools' organizer, then newsletters-web's build_site.py
+```
+
+It reaches into `../newsletters` (override with `--newsletters-dir`) because
+`ingestor-tools` only ever *copies*, skipping files already present — so rewriting
+`../output` alone never reaches the site. Articles matched to a Gmail message are left
+alone unless files exist on disk for them.
 
 ### Listing modes
 
@@ -93,6 +110,17 @@ article URL rather than Gmail:
 Their front matter carries the usual keys plus two provenance fields, `source_url` and
 `origin: backfill`. State lives in `data/backfill.db` alongside — never inside —
 `gmail_ingestor.db`, which backfill only ever opens read-only.
+
+The **raw HTML is the file readers actually see**: `newsletters-web` renders it in an iframe
+that supplies no CSS. An email survives that because mail clients force senders to inline
+their styling; a scraped page keeps its styling on the publisher's CDN. So the raw file is
+written as a complete document with its own stylesheet, matching the pages `build_site.py`
+generates for emails that arrived without an HTML part. Site chrome — buttons, icon SVGs,
+subscribe forms — is stripped; set `article.strip_selectors` in a mapping to override the
+default list for a publication whose real content uses those elements.
+
+Subscriber-only posts are still archived for their title and opening lines, with a footer
+noting that the body is a public preview and linking to the source.
 
 ## Development
 

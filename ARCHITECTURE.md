@@ -102,6 +102,9 @@ Labels → Operations copy flow:
 | Backfill IDs are `web-<sha256(url)[:16]>` | No underscore (ingestor-tools splits on the last one), no `/ \ .` (find_raw_files rejects them), and visibly distinct from 16-hex Gmail IDs. Derived from the *canonicalised* URL so tracking parameters cannot mint a second ID |
 | Listing pagination stops on "no new URLs" | Substack accepts `?offset=N` on its HTML archive and returns page 1 again. Without this guard a mapping would loop to max_pages, or worse, report a truncated read as complete |
 | Backfill shares the `"pipeline"` worker group | The existing Stop button and `_cancel_operation()` apply unchanged, and a backfill can never run concurrently with an ingest |
+| Backfilled HTML carries its own stylesheet | The viewer iframe supplies none, and a scraped page's CSS lives on the publisher's CDN. Reusing gmail-ingestor's writers guaranteed the *markdown* matched — but the markdown is not what gets rendered |
+| `record_article` never downgrades `done` | `classify` reports an already-backfilled URL as `have`, and the runner records every classified entry. Letting that overwrite `done` lost the file paths, hid the files from `prune`, and made the article churn done → have → discovered → done |
+| `prune` reaches into `../newsletters` | `ingestor-tools` only ever *copies*, skipping files already present. Rewriting `../output` alone never propagates — the stale copy is what gets published |
 | Title matching, never date matching | Publication and delivery timestamps differ by hours; near a month boundary a date comparison is actively wrong |
 
 ## Key Files
@@ -125,6 +128,7 @@ Labels → Operations copy flow:
 | `src/ingestor_tui/backfill/writer.py` | Converts and writes via gmail-ingestor's own writers |
 | `src/ingestor_tui/backfill/store.py` | `backfill.db` state (articles + runs) |
 | `src/ingestor_tui/backfill/runner.py` | Orchestrator: list → classify → fetch → write |
+| `src/ingestor_tui/backfill/prune.py` | Removes a label's backfilled artifacts from all four places |
 | `src/ingestor_tui/backfill/probe.py` | Archive analysis for mapping authoring |
 | `src/ingestor_tui/backfill/cli.py` | `ingestor-backfill` console script |
 | `backfill_mappings.json` | Per-label archive URL + listing config (version-controlled) |
@@ -148,6 +152,8 @@ archive URL ──→ listing.py ──→ [ArticleRef] ──→ matcher.classi
                                                    │ ExtractedArticle
                                               writer.py  ──→  ../output/markdown/{slug}_{id}.md
                                                           └─→  ../output/raw/{id}.html
+                                                               (styled, self-contained —
+                                                                this is what readers see)
                                                    │
                                               backfill.db   (state + run audit)
 ```
@@ -166,8 +172,31 @@ client-rendered archive is silently half-read.
 
 ### Output contract
 
-Backfilled artifacts are indistinguishable from ingested ones to downstream tools, except
-for the ID shape and two extra front-matter keys:
+**The rendered artifact is the raw HTML, not the markdown.** `newsletters-web`'s build picks
+`sorted(glob("*.html"))[0]` as the article body and reads the `.md` only for front-matter
+metadata; `view.html` then loads that HTML in `<iframe sandbox="allow-same-origin">` whose
+only style is a white background. No host CSS reaches the article.
+
+An ingested `{id}.html` survives that bare iframe because mail clients strip external
+stylesheets, so senders are forced to inline everything — an email is self-describing by
+necessity. A scraped web page is the inverse: semantic markup whose styling lives in external
+CDN stylesheets. So `extractor._wrap_document` emits a **complete styled document** — charset,
+viewport, `<title>`, and an inlined `ARTICLE_PAGE_CSS` mirroring `EMAIL_PAGE_CSS` in
+`newsletters-web/scripts/build_site.py`, which already styles the pages that build generates
+for emails with no HTML part. Backfilled articles are the same category and share its look.
+
+Two rules follow from how the viewer works, both easy to break by accident:
+
+* **No `<h1>` or subject header in the body.** `app.js` builds each list preview by walking
+  the document's `<body>` text, so a heading would prepend duplicate subject text to every
+  preview row. A *footer* is safe — previews truncate from the start, which is where the
+  subscriber-only note goes.
+* **Interactive chrome is stripped** (`button`, `[role=button]`, form controls). It is inert
+  under the iframe's sandbox and renders as stray glyphs without the site's CSS. Overridable
+  per publication via `article.strip_selectors`.
+
+Beyond that, backfilled artifacts are indistinguishable from ingested ones to downstream
+tools, except for the ID shape and two extra front-matter keys:
 
 ```yaml
 id: "web-4d77605a905cdfc5"     # sha256 of the canonical URL, not a Gmail ID

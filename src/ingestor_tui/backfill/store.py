@@ -142,7 +142,18 @@ class BackfillTracker:
                    label_id = excluded.label_id,
                    title = excluded.title,
                    published_at = excluded.published_at,
-                   status = excluded.status,
+                   -- `done` is a statement about the filesystem: this article
+                   -- has a markdown file and a raw body on disk. A re-scan
+                   -- reclassifies it as `have` (classify() reports an
+                   -- already-backfilled URL that way), and letting that
+                   -- overwrite `done` would lose the paths and make the row
+                   -- stop describing what backfill actually wrote — which in
+                   -- turn hides the files from `prune`. mark_done/mark_failed
+                   -- still set the status outright; only this upsert defers.
+                   status = CASE
+                       WHEN backfill_articles.status = 'done' THEN 'done'
+                       ELSE excluded.status
+                   END,
                    match_reason = excluded.match_reason,
                    updated_at = excluded.updated_at""",
             (article_id, label_name, label_id, url, title, published_at,
@@ -188,6 +199,44 @@ class BackfillTracker:
             (label_name,),
         ).fetchall()
         return {row["url"] for row in rows}
+
+    def articles_for_label(self, label_name: str) -> list[dict]:
+        """Every recorded article for a label, whatever its status.
+
+        Ordered by publish date so a prune preview reads chronologically rather
+        than in insertion order.
+        """
+        rows = self.conn.execute(
+            "SELECT * FROM backfill_articles WHERE label_name = ? "
+            "ORDER BY published_at DESC, article_id",
+            (label_name,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_articles(self, article_ids: list[str]) -> int:
+        """Forget the given articles so a later scan rediscovers their URLs.
+
+        Deleting the row is the point: ``completed_urls`` reads ``done`` rows to
+        decide what to skip, so leaving one behind after removing its files
+        would make the article permanently invisible to both the corpus scan and
+        the backfill scan.
+        """
+        if not article_ids:
+            return 0
+
+        # Chunked to stay under SQLite's variable limit (999 by default), which
+        # a whole-label prune can otherwise exceed.
+        deleted = 0
+        for start in range(0, len(article_ids), 500):
+            chunk = article_ids[start : start + 500]
+            placeholders = ",".join("?" * len(chunk))
+            cursor = self.conn.execute(
+                f"DELETE FROM backfill_articles WHERE article_id IN ({placeholders})",
+                chunk,
+            )
+            deleted += cursor.rowcount
+        self.conn.commit()
+        return deleted
 
     def get_article(self, article_id: str) -> dict | None:
         row = self.conn.execute(

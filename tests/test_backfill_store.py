@@ -141,3 +141,81 @@ def test_last_run_returns_the_newest(tracker: BackfillTracker) -> None:
 
 def test_last_run_for_unknown_label(tracker: BackfillTracker) -> None:
     assert tracker.last_run("Nobody") is None
+
+
+def test_recording_a_scan_does_not_downgrade_a_done_article(
+    tracker: BackfillTracker,
+) -> None:
+    """`done` says files exist on disk; a re-scan must not erase that.
+
+    classify() reports an already-backfilled URL as `have`, and the runner
+    records every classified entry. Without this guard the second scan
+    overwrote the row's status and paths, so the article's files became
+    invisible to prune and it was re-fetched on the run after that.
+    """
+    _record(tracker, "web-1", "https://x.test/p/a")
+    tracker.mark_done("web-1", raw_html_path="raw/web-1.html", markdown_path="md/a.md")
+
+    _record(tracker, "web-1", "https://x.test/p/a", status="have",
+            match_reason="already backfilled")
+
+    row = tracker.get_article("web-1")
+    assert row["status"] == "done"
+    assert row["raw_html_path"] == "raw/web-1.html"
+    assert row["markdown_path"] == "md/a.md"
+    assert tracker.completed_urls("Example") == {"https://x.test/p/a"}
+
+
+def test_recording_still_updates_metadata_on_a_done_article(
+    tracker: BackfillTracker,
+) -> None:
+    """Only the status is pinned — a retitled post still updates."""
+    _record(tracker, "web-1", "https://x.test/p/a", title="Old Headline")
+    tracker.mark_done("web-1", raw_html_path="r", markdown_path="m")
+
+    _record(tracker, "web-1", "https://x.test/p/a", title="New Headline", status="have")
+
+    row = tracker.get_article("web-1")
+    assert row["title"] == "New Headline"
+    assert row["status"] == "done"
+
+
+def test_non_done_statuses_still_transition_freely(tracker: BackfillTracker) -> None:
+    _record(tracker, "web-1", "https://x.test/p/a", status="discovered")
+    _record(tracker, "web-1", "https://x.test/p/a", status="have")
+    assert tracker.get_article("web-1")["status"] == "have"
+
+
+def test_articles_for_label_returns_every_status(tracker: BackfillTracker) -> None:
+    _record(tracker, "web-1", "https://x.test/p/a", status="done")
+    _record(tracker, "web-2", "https://x.test/p/b", status="have")
+    _record(tracker, "web-3", "https://y.test/p/c", label_name="Other")
+
+    ids = {r["article_id"] for r in tracker.articles_for_label("Example")}
+    assert ids == {"web-1", "web-2"}
+
+
+def test_delete_articles_forgets_only_what_it_is_given(tracker: BackfillTracker) -> None:
+    _record(tracker, "web-1", "https://x.test/p/a")
+    _record(tracker, "web-2", "https://x.test/p/b")
+
+    assert tracker.delete_articles(["web-1"]) == 1
+    assert tracker.get_article("web-1") is None
+    assert tracker.get_article("web-2") is not None
+
+
+def test_delete_articles_handles_an_empty_list(tracker: BackfillTracker) -> None:
+    assert tracker.delete_articles([]) == 0
+
+
+def test_delete_articles_exceeds_the_sqlite_variable_limit(
+    tracker: BackfillTracker,
+) -> None:
+    """A whole-label prune can easily pass more IDs than SQLite allows in one
+    statement, so the delete is chunked."""
+    ids = [f"web-{i:016d}" for i in range(1200)]
+    for article_id in ids:
+        _record(tracker, article_id, f"https://x.test/p/{article_id}")
+
+    assert tracker.delete_articles(ids) == 1200
+    assert tracker.count_by_status("Example") == {}
