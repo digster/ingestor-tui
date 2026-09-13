@@ -56,6 +56,49 @@ picks a listing mode and validates the result:
 
 > Add a backfill mapping for the "Joan Westenberg" label using https://www.joanwestenberg.com/archive
 
+#### Labels that span more than one archive
+
+A newsletter can outlive a single URL. When an author rebrands or changes platform, the back
+catalogue often stays at the old address — so one label needs several archives. List them
+under `sources`, newest (canonical) first:
+
+```jsonc
+"Neel Chhabra": {
+  "label_id": "Label_1703214449706674033",
+  "sender": "Neel Chhabra from Resight <resight@substack.com>",
+  "sources": [
+    { "name": "Resight",
+      "archive_url": "https://resight.substack.com/archive",
+      "sender": "Neel Chhabra from Resight <resight@substack.com>",
+      "listing": { /* ... */ }, "article": { /* ... */ } },
+    { "name": "Neel's Newsletter (pre-rebrand)",
+      "archive_url": "https://neelchhabra.substack.com/archive",
+      "sender": "Neel Chhabra from Neel's Newsletter <neelchhabra@substack.com>",
+      "listing": { /* ... */ }, "article": { /* ... */ } }
+  ]
+}
+```
+
+Each source carries its own listing mode, selectors and `sender`, so articles are extracted
+with the right selectors and attributed to the address that era actually sent from. A source
+with no `sender` inherits the mapping's.
+
+Sources are read in order and deduplicated across archives by canonical URL **and**
+normalised title, so a post that appears in both (common after a migration that imported the
+back catalogue) is written once, from the first source that listed it. If one archive goes
+away, the others still run.
+
+The single-archive shape — `archive_url`, `listing` and `article` inline on the mapping, as
+the `Joan Westenberg` entry still uses — remains valid and is the right choice for most
+labels. Use one shape or the other; setting both is an error.
+
+Run the sender-timeline query before authoring a mapping: two senders whose date ranges do
+not abut mean the label spans two publications.
+
+```bash
+sqlite3 ../gmail-ingestor/data/gmail_ingestor.db "SELECT m.sender, MIN(date), MAX(date), COUNT(*) FROM messages m JOIN message_labels ml ON ml.message_id=m.message_id WHERE ml.label_id='LABEL_ID' GROUP BY m.sender ORDER BY MIN(date);"
+```
+
 ### CLI
 
 ```bash

@@ -224,7 +224,18 @@ Two senders whose ranges do not abut mean two publications. Compare the archive'
 post against the label's earliest message: if the archive starts *later* than the corpus,
 an older archive exists somewhere.
 
-**Rule:** Run the sender-timeline query before writing a mapping, and record the boundary in
-`notes` when the label spans more than one archive. A mapping holds exactly one
-`archive_url` and is keyed by label name, so a split label cannot be expressed in the
-current schema — the second archive needs a deliberate decision, not a silent omission.
+**Rule:** Run the sender-timeline query before writing a mapping. When the label spans more
+than one archive, give it a `sources` list — one entry per archive, each with its own
+listing mode, selectors and `sender` — and record the boundary in `notes`.
+
+**Resolved:** the schema originally held exactly one `archive_url` per label, so a split
+label could not be expressed at all. `ArchiveSource` fixed that. Two details of the fix are
+worth keeping in mind when authoring one:
+
+* **`sender` is per source.** It becomes the `from:` line in the front matter. A single
+  mapping-level sender would attribute the entire pre-rebrand back catalogue to an address
+  that did not exist when those posts were sent.
+* **Dedup spans sources on title, not just URL.** Where a migration *did* import the back
+  catalogue, both archives list the same post at different URLs — and different URLs mint
+  different `web-` IDs, so URL-only dedup would write the article twice. Earlier sources
+  win, which is why `sources[0]` should be the canonical archive.

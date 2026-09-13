@@ -62,16 +62,27 @@ class BackfillWriter:
         article_id: str,
         article: ExtractedArticle,
         mapping: BackfillMapping,
+        *,
+        sender: str | None = None,
     ) -> WrittenArticle:
         """Convert and persist one article.
 
         Conversion happens first and entirely in memory, so a trafilatura
         failure leaves no half-written pair of files on disk.
 
+        Args:
+            article_id: The ``web-`` ID minted from the article's URL.
+            article: The extracted page.
+            mapping: The label's mapping, for label name and ID.
+            sender: Sending address to record. Defaults to the mapping-level
+                sender; the runner passes the *source's* sender so that a
+                label spanning two publications attributes each article to the
+                address that era actually sent from.
+
         Raises:
             ConversionError: If the article body yields no markdown.
         """
-        header = self._build_header(article, mapping)
+        header = self._build_header(article, mapping, sender)
         body = EmailBody(plain_text=None, html=article.content_html)
 
         converted = self._converter.convert(article_id, header, body)
@@ -99,7 +110,11 @@ class BackfillWriter:
         )
 
     @staticmethod
-    def _build_header(article: ExtractedArticle, mapping: BackfillMapping) -> EmailHeader:
+    def _build_header(
+        article: ExtractedArticle,
+        mapping: BackfillMapping,
+        sender: str | None = None,
+    ) -> EmailHeader:
         """Build the EmailHeader the converter turns into front matter.
 
         ``to`` is empty, matching ingested newsletters (which are sent to a
@@ -108,7 +123,7 @@ class BackfillWriter:
         """
         return EmailHeader(
             subject=article.title,
-            sender=mapping.sender,
+            sender=sender if sender is not None else mapping.sender,
             to="",
             date=article.published_at,
             label_ids=(mapping.label_id,) if mapping.label_id else (),

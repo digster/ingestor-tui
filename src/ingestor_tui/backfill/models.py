@@ -26,6 +26,12 @@ class ArticleRef:
     url: str
     title: str
     published_at: datetime | None = None
+    # Index into the mapping's ``sources`` tuple. A label may be fed by more
+    # than one archive (a rebrand, a platform move), and each archive carries
+    # its own article selectors and sending address — so a ref has to remember
+    # where it came from or it would be extracted with the wrong config.
+    # Defaults to 0, the primary archive, which is the single-source case.
+    source_index: int = 0
 
 
 @dataclass(frozen=True)

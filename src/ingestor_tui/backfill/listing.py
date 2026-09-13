@@ -10,6 +10,13 @@ Three modes, chosen per-publication when the mapping is authored:
               selectors. Escape hatch for JS-only archives with no endpoint;
               requires the optional ``rendered`` extra.
 
+A label may be fed by **more than one archive** — publications rebrand and move
+platform, and the back catalogue does not reliably follow. ``read_listing``
+walks every ``ArchiveSource`` in order and concatenates the results,
+deduplicating across sources by canonical URL *and* normalised title so an
+article that appears in two archives is written once, from the first source
+that listed it.
+
 Every mode funnels through ``_paginate``, which owns the single most important
 invariant here: **stop when a page yields no new URLs.** Substack's archive
 accepts ``?offset=N`` and silently returns page 1 again, so a naive loop would
@@ -21,12 +28,15 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
+from dataclasses import replace
 from typing import Any
 
 from lxml import html as lxml_html
 
 from ingestor_tui.backfill.fetcher import Fetcher
-from ingestor_tui.backfill.mappings import BackfillMapping, ListingConfig
+from ingestor_tui.backfill.identity import canonicalize_url
+from ingestor_tui.backfill.mappings import ArchiveSource, BackfillMapping, ListingConfig
+from ingestor_tui.backfill.matcher import title_key
 from ingestor_tui.backfill.models import ArticleRef
 from ingestor_tui.backfill.parsing import dotted_get, parse_date, select_field
 
@@ -43,35 +53,126 @@ def read_listing(
     *,
     limit: int | None = None,
 ) -> list[ArticleRef]:
-    """Enumerate every article in a publication's archive, newest first.
+    """Enumerate every article for a label, across all its archives.
+
+    A label may be fed by more than one archive — see ``ArchiveSource``. Each
+    is read in turn and the results concatenated in source order, so
+    ``sources[0]`` (the primary archive) contributes first.
 
     Args:
         mapping: The validated mapping entry for this label.
         fetcher: Polite HTTP client.
-        limit: Stop once this many unique articles have been collected.
+        limit: Stop once this many unique articles have been collected,
+            counted across every source rather than per archive.
 
     Returns:
-        Deduplicated ArticleRefs in listing order.
+        Deduplicated ArticleRefs, each tagged with the source it came from.
     """
-    cfg = mapping.listing
+    seen_urls: set[str] = set()
+    seen_titles: set[str] = set()
+    refs: list[ArticleRef] = []
+
+    for index, source in enumerate(mapping.sources):
+        if limit is not None and len(refs) >= limit:
+            break
+
+        remaining = None if limit is None else limit - len(refs)
+        before = len(refs)
+        try:
+            _read_source(
+                source, index, fetcher,
+                refs=refs, seen_urls=seen_urls, seen_titles=seen_titles,
+                limit=remaining,
+            )
+        except ListingError:
+            # One dead archive must not cost us the others. An old
+            # publication's URL going away is exactly the kind of decay a
+            # multi-source mapping exists to survive; re-raise only if this
+            # leaves us with nothing at all.
+            if not mapping.is_multi_source:
+                raise
+            logger.warning(
+                "Archive %r failed to list — continuing with the other sources",
+                source.display_name, exc_info=True,
+            )
+            continue
+
+        if mapping.is_multi_source:
+            logger.info(
+                "Archive %r contributed %d article(s)",
+                source.display_name, len(refs) - before,
+            )
+
+    if not refs and mapping.is_multi_source:
+        raise ListingError(
+            f"No articles listed for {mapping.label_name!r} from any of its "
+            f"{len(mapping.sources)} archives"
+        )
+
+    logger.info("Listing produced %d unique articles", len(refs))
+    return refs
+
+
+def _read_source(
+    source: ArchiveSource,
+    source_index: int,
+    fetcher: Fetcher,
+    *,
+    refs: list[ArticleRef],
+    seen_urls: set[str],
+    seen_titles: set[str],
+    limit: int | None,
+) -> None:
+    """Read one archive, appending its new articles to ``refs`` in place.
+
+    Deduplication spans sources, not just pages, and runs on two keys:
+
+    * **canonical URL** — the same article reachable at two spellings.
+    * **normalised title** — the same article genuinely republished at a
+      different URL. This is the common case after a platform migration that
+      imported the back catalogue: both archives list it, the URLs differ, so
+      URL dedup alone would mint two IDs and write the article twice.
+
+    Earlier sources win, which is why ``sources[0]`` is documented as the
+    archive whose version of a post should be kept.
+    """
+    cfg = source.listing
     reader = _READERS.get(cfg.mode)
     if reader is None:  # pragma: no cover — ListingConfig validates the mode
         raise ListingError(f"Unknown listing mode {cfg.mode!r}")
 
-    seen: set[str] = set()
-    refs: list[ArticleRef] = []
-
     for page_refs in reader(cfg, fetcher):
         new_on_page = 0
         for ref in page_refs:
-            if not ref.url or ref.url in seen:
+            if not ref.url:
                 continue
-            seen.add(ref.url)
-            refs.append(ref)
+
+            url_key = canonicalize_url(ref.url)
+            if url_key in seen_urls:
+                continue
+
+            title_key_value = title_key(ref.title)
+            if title_key_value and title_key_value in seen_titles:
+                logger.debug(
+                    "Skipping %r from %r — already listed by an earlier archive",
+                    ref.title, source.display_name,
+                )
+                # Counted as progress: the page IS advancing, we are just
+                # discarding what it found. Treating it as no-progress would
+                # end the walk early on an archive that fully overlaps another.
+                seen_urls.add(url_key)
+                new_on_page += 1
+                continue
+
+            seen_urls.add(url_key)
+            if title_key_value:
+                seen_titles.add(title_key_value)
+            refs.append(replace(ref, source_index=source_index))
             new_on_page += 1
+
             if limit is not None and len(refs) >= limit:
                 logger.info("Listing limit of %d reached", limit)
-                return refs
+                return
 
         # The guard described in the module docstring. An empty page and a
         # page of entirely-duplicate URLs are the same signal: we are not
@@ -79,9 +180,6 @@ def read_listing(
         if new_on_page == 0:
             logger.debug("Page yielded no new URLs — end of listing")
             break
-
-    logger.info("Listing produced %d unique articles", len(refs))
-    return refs
 
 
 # --- page URL generation -----------------------------------------------------

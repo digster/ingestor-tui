@@ -284,8 +284,17 @@ def _cmd_list(args: argparse.Namespace) -> int:
         state = counts.get(name, {})
         summary = ", ".join(f"{k}={v}" for k, v in sorted(state.items())) or "no runs yet"
         print(f"  {name}")
-        print(f"    archive: {mapping.archive_url}")
-        print(f"    mode:    {mapping.listing.mode}  (label_id={mapping.label_id or 'unset'})")
+        print(f"    label_id: {mapping.label_id or 'unset'}")
+        # One line per archive. A label fed by several archives is the whole
+        # reason this is a loop — printing only the primary would hide the
+        # others exactly where an operator goes looking for them.
+        for index, source in enumerate(mapping.sources):
+            marker = "archive:" if index == 0 else "        "
+            label = f" [{source.name}]" if source.name else ""
+            print(f"    {marker} {source.archive_url}{label}")
+            print(f"             mode={source.listing.mode}  from={source.sender or 'unset'}")
+            if source.notes:
+                print(f"             notes: {source.notes}")
         print(f"    state:   {summary}")
         if mapping.notes:
             print(f"    notes:   {mapping.notes}")

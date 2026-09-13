@@ -323,3 +323,109 @@ def test_missing_label_id_falls_back_to_markdown(project, mapping_store, stub_fe
     by_title = {e.ref.title: e for e in entries}
     assert by_title["Already Held"].status == "have"
     assert by_title["A New Post"].is_missing
+
+
+# --- multi-source labels ---
+
+
+def _multi_source_store(tmp_path: Path) -> MappingStore:
+    """A label fed by two archives with different selectors and senders."""
+    store = MappingStore(tmp_path / "multi.json")
+
+    def source(host: str, selector: str, sender: str) -> dict:
+        return {
+            "name": host,
+            "archive_url": f"https://{host}/archive",
+            "sender": sender,
+            "listing": {
+                "mode": "json",
+                "url_template": f"https://{host}/api?offset={{offset}}&limit={{limit}}",
+                "pagination": {"type": "offset", "page_size": 10, "max_pages": 2},
+                "fields": {"url": "canonical_url", "title": "title", "date": "post_date"},
+            },
+            "article": {"content_selector": selector},
+        }
+
+    store.save(
+        "Example",
+        {
+            "label_id": "Label_1",
+            "sources": [
+                source("new.test", "div.content", "New Era <new@x.test>"),
+                source("old.test", "div.legacy", "Old Era <old@x.test>"),
+            ],
+        },
+    )
+    return store
+
+
+def _two_archives(*, new: str, old: str) -> dict[str, str]:
+    def posts(host: str, title: str) -> str:
+        return json.dumps(
+            [
+                {
+                    "canonical_url": f"https://{host}/p/{title.lower().replace(' ', '-')}",
+                    "title": title,
+                    "post_date": "2026-04-05T09:00:00.000Z",
+                }
+            ]
+        )
+
+    return {
+        "https://new.test/api?offset=0&limit=10": posts("new.test", new),
+        "https://new.test/api?offset=10&limit=10": "[]",
+        "https://old.test/api?offset=0&limit=10": posts("old.test", old),
+        "https://old.test/api?offset=10&limit=10": "[]",
+    }
+
+
+def test_scan_covers_every_archive(project, tmp_path, stub_fetcher) -> None:
+    """The point of the feature: a back catalogue at another URL is seen."""
+    stub_fetcher(_two_archives(new="A New Post", old="An Old Post"))
+
+    entries = make_runner(_multi_source_store(tmp_path)).scan("Example")
+
+    assert {e.ref.title for e in entries} == {"A New Post", "An Old Post"}
+
+
+def test_each_article_is_extracted_with_its_own_archive_selectors(
+    project, tmp_path, stub_fetcher
+) -> None:
+    """An old article parsed with the new archive's selectors would be empty."""
+    pages = _two_archives(new="A New Post", old="An Old Post")
+    pages["https://new.test/p/a-new-post"] = (
+        '<html><body><div class="content"><p>New body.</p></div></body></html>'
+    )
+    # Only reachable via the second source's div.legacy selector.
+    pages["https://old.test/p/an-old-post"] = (
+        '<html><body><div class="legacy"><p>Old body.</p></div></body></html>'
+    )
+    stub_fetcher(pages)
+
+    result = make_runner(_multi_source_store(tmp_path)).run("Example")
+
+    assert result.written == 2
+    assert result.failed == 0
+    bodies = {
+        p.read_text(encoding="utf-8")
+        for p in Path(GmailIngestorSettings().output_markdown_dir).glob("*.md")
+    }
+    assert any("Old body." in b for b in bodies)
+    assert any("New body." in b for b in bodies)
+
+
+def test_each_article_is_attributed_to_its_own_era(project, tmp_path, stub_fetcher) -> None:
+    """Front matter must credit the address that era actually sent from."""
+    stub_fetcher(_two_archives(new="A New Post", old="An Old Post"))
+
+    make_runner(_multi_source_store(tmp_path)).run("Example")
+
+    senders = {}
+    for path in Path(GmailIngestorSettings().output_markdown_dir).glob("*.md"):
+        text = path.read_text(encoding="utf-8")
+        subject = next(ln for ln in text.split("\n") if ln.startswith("subject:"))
+        sender = next(ln for ln in text.split("\n") if ln.startswith("from:"))
+        senders[subject] = sender
+
+    assert any("New Era <new@x.test>" in s for k, s in senders.items() if "A New Post" in k)
+    assert any("Old Era <old@x.test>" in s for k, s in senders.items() if "An Old Post" in k)

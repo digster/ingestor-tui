@@ -31,31 +31,66 @@
     },
     "Neel Chhabra": {
       "label_id": "Label_1703214449706674033",
-      "archive_url": "https://resight.substack.com/archive",
       "sender": "Neel Chhabra from Resight <resight@substack.com>",
-      "listing": {
-        "mode": "json",
-        "url_template": "https://resight.substack.com/api/v1/archive?sort=new&offset={offset}&limit={limit}",
-        "pagination": {
-          "type": "offset",
-          "page_size": 50,
-          "start": 0,
-          "max_pages": 40
+      "sources": [
+        {
+          "name": "Resight",
+          "archive_url": "https://resight.substack.com/archive",
+          "sender": "Neel Chhabra from Resight <resight@substack.com>",
+          "listing": {
+            "mode": "json",
+            "url_template": "https://resight.substack.com/api/v1/archive?sort=new&offset={offset}&limit={limit}",
+            "pagination": {
+              "type": "offset",
+              "page_size": 50,
+              "start": 0,
+              "max_pages": 40
+            },
+            "items_path": "",
+            "fields": {
+              "url": "canonical_url",
+              "title": "title",
+              "date": "post_date"
+            }
+          },
+          "article": {
+            "content_selector": "div.available-content",
+            "title_selector": "h1.post-title",
+            "date_selector": "time[datetime]",
+            "date_attr": "datetime"
+          },
+          "notes": "Current publication, from 2026-07-20. Listed first so it is the primary source: if a post ever appears in both archives, this version wins. Mode is 'json' for the usual Substack reason — the HTML archive server-renders only ~9 entries (2 of which are the /podcast and /notes tabs, not posts) and the rest is client-rendered, so mode 'html' would silently backfill one page. 7 posts, returned in a single API page."
         },
-        "items_path": "",
-        "fields": {
-          "url": "canonical_url",
-          "title": "title",
-          "date": "post_date"
+        {
+          "name": "Neel’s Newsletter (pre-rebrand)",
+          "archive_url": "https://neelchhabra.substack.com/archive",
+          "sender": "Neel Chhabra from Neel’s Newsletter <neelchhabra@substack.com>",
+          "listing": {
+            "mode": "json",
+            "url_template": "https://neelchhabra.substack.com/api/v1/archive?sort=new&offset={offset}&limit={limit}",
+            "pagination": {
+              "type": "offset",
+              "page_size": 50,
+              "start": 0,
+              "max_pages": 40
+            },
+            "items_path": "",
+            "fields": {
+              "url": "canonical_url",
+              "title": "title",
+              "date": "post_date"
+            }
+          },
+          "article": {
+            "content_selector": "div.available-content",
+            "title_selector": "h1.post-title",
+            "date_selector": "time[datetime]",
+            "date_attr": "datetime"
+          },
+          "notes": "The pre-rebrand publication, 2025-04-28 to 2026-05-09. Still live and still serving its own archive: the rename to Resight did NOT carry the back catalogue to the new subdomain, which is why this label needs two sources. 23 posts, single API page. Its own sender is set so backfilled front matter carries the address these posts actually went out from."
         }
-      },
-      "article": {
-        "content_selector": "div.available-content",
-        "title_selector": "h1.post-title",
-        "date_selector": "time[datetime]",
-        "date_attr": "datetime"
-      },
-      "notes": "Substack. Mode is 'json' for the usual Substack reason: the HTML archive server-renders only ~9 entries (2 of which are the /podcast and /notes tabs, not posts) and the rest is client-rendered, so mode 'html' would silently backfill one page. /api/v1/archive returns all 7 posts in a single page. NOTE - the publication was rebranded: posts up to 2026-05-09 were published as \"Neel's Newsletter\" at neelchhabra.substack.com (23 posts, sender neelchhabra@substack.com) and did NOT carry over to this subdomain; resight.substack.com starts at 2026-07-20 under sender resight@substack.com. This mapping therefore covers the post-rebrand archive only. The old back catalogue is a separate publication at a separate URL and cannot be expressed here, because a mapping holds exactly one archive_url and is keyed by label name."
+      ],
+      "notes": "One label, two Substack publications. Neel rebranded 'Neel’s Newsletter' (neelchhabra@substack.com) to 'Resight' (resight@substack.com) and moved to a new subdomain; email delivery gaps 2026-05-09 to 2026-08-22, and the archives did not merge. The sender-timeline query in the backfill-mapping skill is what surfaces this — two senders whose date ranges do not abut. See 'A rebrand can split one label across two archives' in LEARNINGS.md."
     }
   }
 }

@@ -1,7 +1,10 @@
 """Load, validate and persist ``backfill_mappings.json``.
 
 One entry per Gmail label, describing where that publication's web archive
-lives and how to read it. Entries are authored by an LLM (see the
+lives and how to read it. An entry holds one or more ``ArchiveSource``: a
+newsletter can outlive a single archive URL, so the schema accepts either the
+single-archive shorthand (``archive_url``/``listing``/``article`` inline) or a
+``sources`` list, and normalises both to a tuple. Entries are authored by an LLM (see the
 ``backfill-mapping`` skill) after probing the archive page, then validated here
 before any network work happens.
 
@@ -13,7 +16,7 @@ a mapping is a fact about a publication, not a user preference.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -159,46 +162,188 @@ class ListingConfig:
 
 
 @dataclass(frozen=True)
+class ArchiveSource:
+    """One archive a label's articles can be read from.
+
+    A publication's lifetime is not always one URL. Authors rebrand, change
+    platform, or move to a new subdomain, and the back catalogue does not
+    reliably move with them — see "A rebrand can split one label across two
+    archives" in LEARNINGS.md. Each era gets its own source so the whole
+    history of a label can be backfilled from one mapping entry.
+    """
+
+    archive_url: str
+    listing: ListingConfig
+    article: ArticleConfig
+    # Sending address for articles from this archive. Resolved at parse time:
+    # blank here inherits the mapping-level ``sender``. Set it per source when
+    # the publication changed address, so backfilled front matter carries the
+    # address that era's emails genuinely came from rather than the current one.
+    sender: str = ""
+    # Human label for logs, the CLI and the TUI — e.g. "Neel's Newsletter
+    # (pre-rebrand)". Falls back to the archive host when blank.
+    name: str = ""
+    notes: str = ""
+
+    @property
+    def display_name(self) -> str:
+        """Name for operator-facing output, never empty."""
+        if self.name:
+            return self.name
+        from urllib.parse import urlsplit
+
+        return urlsplit(self.archive_url).netloc or self.archive_url
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], *, context: str) -> ArchiveSource:
+        if not isinstance(data, dict):
+            raise MappingError(f"{context} must be an object")
+
+        archive_url = str(data.get("archive_url", "")).strip()
+        if not archive_url:
+            raise MappingError(f"{context}: archive_url is required")
+        if not archive_url.startswith(("http://", "https://")):
+            raise MappingError(
+                f"{context}: archive_url must be http(s), got {archive_url!r}"
+            )
+
+        listing = data.get("listing")
+        if not isinstance(listing, dict):
+            raise MappingError(f"{context}: listing section is required")
+
+        try:
+            listing_cfg = ListingConfig.from_dict(listing)
+        except MappingError as e:
+            raise MappingError(f"{context}: {e}") from e
+
+        return cls(
+            archive_url=archive_url,
+            listing=listing_cfg,
+            article=ArticleConfig.from_dict(data.get("article") or {}),
+            sender=str(data.get("sender", "")).strip(),
+            name=str(data.get("name", "")).strip(),
+            notes=str(data.get("notes", "")),
+        )
+
+
+@dataclass(frozen=True)
 class BackfillMapping:
-    """A complete mapping entry for one label."""
+    """A complete mapping entry for one label.
+
+    Holds one or more :class:`ArchiveSource`. ``sources`` is never empty, and
+    ``sources[0]`` is the *primary* archive — the one whose articles win when
+    two sources list the same post. Author the current/canonical archive first.
+    """
 
     label_name: str
     label_id: str
-    archive_url: str
     sender: str
-    listing: ListingConfig
-    article: ArticleConfig
+    sources: tuple[ArchiveSource, ...]
     notes: str = ""
+
+    # --- single-source conveniences -------------------------------------
+    # The overwhelmingly common case is one archive, and these keep callers
+    # that predate multi-source support (listing.py, cli.py, the TUI) reading
+    # naturally instead of indexing into a tuple they do not care about.
+
+    @property
+    def archive_url(self) -> str:
+        return self.sources[0].archive_url
+
+    @property
+    def listing(self) -> ListingConfig:
+        return self.sources[0].listing
+
+    @property
+    def article(self) -> ArticleConfig:
+        return self.sources[0].article
+
+    @property
+    def is_multi_source(self) -> bool:
+        return len(self.sources) > 1
+
+    def source_at(self, index: int) -> ArchiveSource:
+        """Resolve a source by index, falling back to the primary.
+
+        Out-of-range indexes are clamped rather than raised: an index reaches
+        here from an ``ArticleRef`` that may have been recorded against an
+        older version of the mapping, and backfilling such an article against
+        the primary archive's selectors beats crashing the run.
+        """
+        if 0 <= index < len(self.sources):
+            return self.sources[index]
+        return self.sources[0]
 
     @classmethod
     def from_dict(cls, label_name: str, data: dict[str, Any]) -> BackfillMapping:
         if not isinstance(data, dict):
             raise MappingError(f"mapping for {label_name!r} must be an object")
 
-        archive_url = str(data.get("archive_url", "")).strip()
-        if not archive_url:
-            raise MappingError(f"{label_name}: archive_url is required")
-        if not archive_url.startswith(("http://", "https://")):
-            raise MappingError(f"{label_name}: archive_url must be http(s), got {archive_url!r}")
+        mapping_sender = str(data.get("sender", "")).strip()
+        raw_sources = data.get("sources")
+        has_inline = bool(str(data.get("archive_url", "")).strip())
 
-        listing = data.get("listing")
-        if not isinstance(listing, dict):
-            raise MappingError(f"{label_name}: listing section is required")
+        # The two spellings are mutually exclusive. Accepting both would leave
+        # it ambiguous which archive is primary, and silently ignoring one is
+        # precisely the class of quiet truncation this subsystem guards against.
+        if raw_sources is not None and has_inline:
+            raise MappingError(
+                f"{label_name}: use either a top-level archive_url or a 'sources' "
+                "list, not both"
+            )
 
-        try:
-            listing_cfg = ListingConfig.from_dict(listing)
-        except MappingError as e:
-            raise MappingError(f"{label_name}: {e}") from e
+        if raw_sources is not None:
+            if not isinstance(raw_sources, list) or not raw_sources:
+                raise MappingError(f"{label_name}: 'sources' must be a non-empty list")
+            sources = tuple(
+                ArchiveSource.from_dict(entry, context=f"{label_name} source[{i}]")
+                for i, entry in enumerate(raw_sources)
+            )
+        else:
+            # Legacy single-archive shape: the archive fields sit inline on the
+            # mapping. Normalised to a one-element tuple so everything
+            # downstream handles exactly one shape.
+            #
+            # ``notes`` and ``name`` are cleared on the way in: in this shape
+            # they describe the *mapping*, and letting the lone source inherit
+            # them would print the same prose twice wherever both are shown.
+            sources = (
+                replace(
+                    ArchiveSource.from_dict(data, context=label_name), notes="", name=""
+                ),
+            )
+
+        # Resolve the sender fallback once, here, so no consumer has to know
+        # that a blank per-source sender means "inherit".
+        sources = tuple(
+            src if src.sender else replace(src, sender=mapping_sender) for src in sources
+        )
+
+        duplicates = _duplicate_archive_urls(sources)
+        if duplicates:
+            raise MappingError(
+                f"{label_name}: duplicate archive_url in sources: {', '.join(duplicates)}"
+            )
 
         return cls(
             label_name=label_name,
             label_id=str(data.get("label_id", "")).strip(),
-            archive_url=archive_url,
-            sender=str(data.get("sender", "")).strip(),
-            listing=listing_cfg,
-            article=ArticleConfig.from_dict(data.get("article") or {}),
+            sender=mapping_sender,
+            sources=sources,
             notes=str(data.get("notes", "")),
         )
+
+
+def _duplicate_archive_urls(sources: tuple[ArchiveSource, ...]) -> list[str]:
+    """Archive URLs appearing more than once, in first-seen order."""
+    seen: set[str] = set()
+    dupes: list[str] = []
+    for src in sources:
+        key = src.archive_url.rstrip("/").lower()
+        if key in seen and src.archive_url not in dupes:
+            dupes.append(src.archive_url)
+        seen.add(key)
+    return dupes
 
 
 class MappingStore:

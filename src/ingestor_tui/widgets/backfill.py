@@ -149,11 +149,16 @@ class BackfillWidget(Vertical):
                 ", ".join(f"{k}={v}" for k, v in sorted(summary.items())) if summary else "—"
             )
             check = "✓" if name == self._selected else ""
+            # Multi-source labels show the primary archive plus a count, so
+            # the row stays one line while still admitting the others exist.
+            archive_text = mapping.archive_url
+            if mapping.is_multi_source:
+                archive_text += f"  (+{len(mapping.sources) - 1} more)"
             table.add_row(
                 check,
                 name,
                 mapping.listing.mode,
-                mapping.archive_url,
+                archive_text,
                 state_text,
                 key=name,
             )

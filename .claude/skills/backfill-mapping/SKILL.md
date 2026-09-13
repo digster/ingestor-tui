@@ -33,11 +33,10 @@ the publication moved, and you must find out whether the back catalogue moved wi
 Compare the archive's earliest post against the label's earliest message: if the archive
 starts *later* than the corpus does, an older archive exists at another URL.
 
-This matters because a mapping holds exactly one `archive_url` and is keyed by label name,
-so a label split across two publications cannot be fully expressed. The scan gives you no
-warning — see "A rebrand can split one label across two archives" in `LEARNINGS.md`, where
-a mapping passed every check below while 23 posts sat at a subdomain it never visited. When
-the label is split, back the decision out to the user and record the boundary in `notes`.
+When that happens the label needs **more than one archive source** — see step 4b. The scan
+gives you no warning otherwise: a mapping can pass every check below while an entire back
+catalogue sits at a subdomain it never visits (see "A rebrand can split one label across two
+archives" in `LEARNINGS.md`). Probe *each* archive separately; they may need different modes.
 
 If the label name in the mapping and the one in `labels` differ, the mapping's key must be
 the **Gmail label name** — it becomes the `labels:` value in the output front matter, and
@@ -146,6 +145,57 @@ Notes on the fields:
 - `notes` is not decoration. Record *why* the mode was chosen and any trap you hit; the
   next person to touch the mapping (or you, in six months) needs that reasoning.
 
+### 4b. Labels that span more than one archive
+
+When the sender timeline showed a split, use `sources` instead of a top-level
+`archive_url`. Each entry is a full archive config — its own listing mode, selectors and
+`sender` — and they are read in the order given:
+
+```json
+"Neel Chhabra": {
+  "label_id": "Label_1703214449706674033",
+  "sender": "Neel Chhabra from Resight <resight@substack.com>",
+  "sources": [
+    {
+      "name": "Resight",
+      "archive_url": "https://resight.substack.com/archive",
+      "sender": "Neel Chhabra from Resight <resight@substack.com>",
+      "listing": { "mode": "json", "...": "..." },
+      "article": { "content_selector": "div.available-content" },
+      "notes": "Current publication, from 2026-07-20."
+    },
+    {
+      "name": "Neel's Newsletter (pre-rebrand)",
+      "archive_url": "https://neelchhabra.substack.com/archive",
+      "sender": "Neel Chhabra from Neel's Newsletter <neelchhabra@substack.com>",
+      "listing": { "mode": "json", "...": "..." },
+      "article": { "content_selector": "div.available-content" },
+      "notes": "23 posts, 2025-04-28 to 2026-05-09. The rename did not move them."
+    }
+  ],
+  "notes": "Why this label is split, and where the boundary falls."
+}
+```
+
+Rules that matter:
+
+- **Order is meaningful.** `sources[0]` is primary: when two archives list the same post,
+  the first one wins. Put the current/canonical archive first.
+- **Set `sender` per source** whenever the sending address changed. It lands in the `from:`
+  front matter, so getting it wrong misattributes a whole era. A source without one
+  inherits the mapping-level `sender`.
+- **`name` is for humans** — it appears in logs, `list` output and the TUI. Without it you
+  get the archive's hostname.
+- **Do not set both** a top-level `archive_url` and `sources`; that is a validation error,
+  because which archive is primary would be ambiguous.
+- Dedup runs across sources on canonical URL *and* normalised title, so an archive that
+  imported the other's back catalogue will not write everything twice.
+- A dead archive is tolerated when there are others — the run logs a warning and continues.
+  It only fails if every source yields nothing.
+
+Probe each archive separately before writing the entry: a publication that changed platform
+may need `json` for one era and `html` or `rendered` for another.
+
 ## 5. Validate
 
 ```bash
@@ -158,6 +208,9 @@ Check all four before declaring it done:
 - **Listing count is plausible.** Suspiciously round numbers — exactly 10, 12, 20, 24 —
   usually mean one page was read and pagination stopped early. Compare against what the
   archive page shows when scrolled.
+- **Every source contributed.** A multi-source scan logs one
+  `Archive '<name>' contributed N article(s)` line per archive. A zero there means that
+  source is misconfigured or dead, and the run will otherwise look entirely healthy.
 - **Titles and dates are real**, not empty strings or `----------`.
 - **The held/missing split makes sense.** All-missing on a label with hundreds of held
   messages means the matcher is not finding overlap: check that `label_id` is right and
@@ -180,6 +233,6 @@ Check all four before declaring it done:
 
 ## What you must not change
 
-The mapping controls **reading** the archive. It does not control the output format.
+The mapping controls **reading** the archives. It does not control the output format.
 Filenames, front matter and the `web-<hash>` IDs come from shared code so backfilled files
 stay byte-compatible with ingested ones — do not add fields hoping to influence them.

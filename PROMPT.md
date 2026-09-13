@@ -62,3 +62,7 @@ the backfill content not have the HTML like our other emails? And how are we fix
 we gonna have a fallback style?"
 
 Add backfill mapping for - Neel Chhabra - https://resight.substack.com/archive
+
+Follow-up: "you are right, a newsletter can span more than one archive url over its
+lifespan. add support for more than one archive urls for a label. use Neel Chhabra as an
+example."

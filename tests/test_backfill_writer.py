@@ -202,3 +202,25 @@ def test_injection_places_keys_inside_the_block() -> None:
     text = '---\nid: "a"\n---\nbody\n'
     result = _inject_front_matter(text, {"origin": "backfill"})
     assert result == '---\nid: "a"\norigin: "backfill"\n---\nbody\n'
+
+
+# --- per-source attribution ---
+
+
+def test_explicit_sender_overrides_the_mapping_sender(writer, article, mapping) -> None:
+    """A label spanning two publications must credit each era correctly.
+
+    The runner passes the *source's* sender, so a pre-rebrand article carries
+    the address those emails actually went out from rather than the current one.
+    """
+    era_sender = "Neel Chhabra from Neel’s Newsletter <neelchhabra@substack.com>"
+
+    result = writer.write("web-aaaabbbbccccdddd", article, mapping, sender=era_sender)
+
+    assert front_matter(result.markdown_path)["from"] == era_sender
+
+
+def test_omitted_sender_falls_back_to_the_mapping(writer, article, mapping) -> None:
+    result = writer.write("web-eeeeffff00001111", article, mapping)
+
+    assert front_matter(result.markdown_path)["from"] == 'Author "Ace" <author@x.test>'

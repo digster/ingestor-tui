@@ -131,7 +131,7 @@ Labels → Operations copy flow:
 | `src/ingestor_tui/backfill/prune.py` | Removes a label's backfilled artifacts from all four places |
 | `src/ingestor_tui/backfill/probe.py` | Archive analysis for mapping authoring |
 | `src/ingestor_tui/backfill/cli.py` | `ingestor-backfill` console script |
-| `backfill_mappings.json` | Per-label archive URL + listing config (version-controlled) |
+| `backfill_mappings.json` | Per-label archive source(s) + listing config (version-controlled) |
 | `.claude/skills/backfill-mapping/SKILL.md` | LLM workflow for authoring a mapping |
 
 ## Backfill Subsystem
@@ -141,12 +141,21 @@ catalogue we subscribed to late, posts published after an author changed platfor
 or paid-tier articles — is permanently absent. Backfill closes those gaps from the
 publication's own web archive.
 
+A label maps to **one or more** `ArchiveSource`. Publications rebrand and change platform,
+and the back catalogue does not reliably move with them, so a single `archive_url` cannot
+always describe a label's whole history. Each source owns its own listing mode, article
+selectors and sending address; `listing.py` reads them in order and deduplicates across
+them by canonical URL and normalised title, tagging every `ArticleRef` with the
+`source_index` it came from so the runner extracts and attributes it correctly. The
+single-archive shorthand parses into a one-element tuple, so everything downstream handles
+exactly one shape.
+
 ```
 backfill_mappings.json  ──→  MappingStore     (validated config per label)
-                                   │
+                                   │              └─ 1..n ArchiveSource
          gmail_ingestor.db  ──→  CorpusIndex   (what we already hold; read-only)
                                    │
-archive URL ──→ listing.py ──→ [ArticleRef] ──→ matcher.classify ──→ [ScanEntry]
+archive URLs ─→ listing.py ──→ [ArticleRef] ──→ matcher.classify ──→ [ScanEntry]
                                                                         │ missing
                                               extractor.py  ←───────────┘
                                                    │ ExtractedArticle

@@ -69,6 +69,13 @@ class BackfillRunner:
     def scan(self, label_name: str, *, limit: int | None = None) -> list[ScanEntry]:
         """Classify every archive entry for a label. Performs no writes."""
         mapping = self._mappings.get(label_name)
+        if mapping.is_multi_source:
+            logger.info(
+                "%s: reading %d archives — %s",
+                label_name,
+                len(mapping.sources),
+                ", ".join(s.display_name for s in mapping.sources),
+            )
         progress = BackfillProgress(label=label_name, current_stage="listing")
         self._notify(progress)
 
@@ -173,8 +180,14 @@ class BackfillRunner:
                 self._record(tracker, mapping, entry)
 
                 try:
-                    article = extract_article(entry.ref, mapping.article, fetcher)
-                    result = writer.write(entry.article_id, article, mapping)
+                    # Each archive carries its own article selectors and
+                    # sending address, so resolve the source this ref came
+                    # from rather than assuming the primary one.
+                    source = mapping.source_at(entry.ref.source_index)
+                    article = extract_article(entry.ref, source.article, fetcher)
+                    result = writer.write(
+                        entry.article_id, article, mapping, sender=source.sender
+                    )
                     tracker.mark_done(
                         entry.article_id,
                         raw_html_path=str(result.raw_html_path),
