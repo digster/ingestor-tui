@@ -60,3 +60,5 @@ Add a newsletter backfill feature: a mapping file in this project associates a l
 Follow-up: "Yes, you are right about Trafilatura and the html connection, my bad. So, Why did
 the backfill content not have the HTML like our other emails? And how are we fixing that? Are
 we gonna have a fallback style?"
+
+Add backfill mapping for - Neel Chhabra - https://resight.substack.com/archive

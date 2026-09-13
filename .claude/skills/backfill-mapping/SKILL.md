@@ -22,6 +22,23 @@ markdown scan:
 sqlite3 ../gmail-ingestor/data/gmail_ingestor.db "SELECT label_id, label_name FROM labels WHERE label_name LIKE '%NAME%';"
 ```
 
+Then check the **sender timeline**, before you look at the archive at all:
+
+```bash
+sqlite3 ../gmail-ingestor/data/gmail_ingestor.db "SELECT m.sender, MIN(date), MAX(date), COUNT(*) FROM messages m JOIN message_labels ml ON ml.message_id=m.message_id WHERE ml.label_id='LABEL_ID' GROUP BY m.sender ORDER BY MIN(date);"
+```
+
+One sender is the simple case. Two or more senders whose date ranges **do not abut** mean
+the publication moved, and you must find out whether the back catalogue moved with it.
+Compare the archive's earliest post against the label's earliest message: if the archive
+starts *later* than the corpus does, an older archive exists at another URL.
+
+This matters because a mapping holds exactly one `archive_url` and is keyed by label name,
+so a label split across two publications cannot be fully expressed. The scan gives you no
+warning — see "A rebrand can split one label across two archives" in `LEARNINGS.md`, where
+a mapping passed every check below while 23 posts sat at a subdomain it never visited. When
+the label is split, back the decision out to the user and record the boundary in `notes`.
+
 If the label name in the mapping and the one in `labels` differ, the mapping's key must be
 the **Gmail label name** — it becomes the `labels:` value in the output front matter, and
 `ingestor-tools` files articles into `newsletters/{that name}/`.

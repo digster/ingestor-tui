@@ -189,3 +189,42 @@ files, the `../newsletters/<label>/<id>/` directory, and the database rows) so a
 **Rule:** Changing how a file is *generated* is only half the job when a downstream copier
 skips existing paths. Anything that regenerates output into this pipeline needs a way to
 invalidate `../newsletters/` too, or the fix stops at `../output/`.
+
+## A rebrand can split one label across two archives, and the scan looks healthy
+
+**Symptom:** A mapping validates, scans, and backfills cleanly — plausible counts, real
+titles, exact-match overlap with the corpus — while most of the label's back catalogue sits
+at a URL the mapping never visits.
+
+**Cause:** `Neel Chhabra` (`Label_1703214449706674033`) is one Gmail label fed by two
+Substack publications. Posts up to 2026-05-09 went out as *Neel's Newsletter* from
+`neelchhabra@substack.com` and live at `neelchhabra.substack.com` (23 posts). From
+2026-07-20 the publication is *Resight*, sending from `resight@substack.com` and publishing
+at `resight.substack.com` (7 posts). The rename did **not** carry the back catalogue to the
+new subdomain.
+
+The preceding case set the wrong expectation. Joan Westenberg also migrated platforms, but
+her Substack import pulled the whole history into the new home — 113 listed against 27 held
+— so a single `archive_url` covered everything. That is the lucky case, not the rule.
+
+Nothing in the scan flags the split. `Neel Chhabra: 7 listed, 3 already held, 4 missing` is
+exactly what a healthy small archive looks like, and all three matches were exact
+normalised-title hits, so the matcher confirms `label_id` is correct. Every check in the
+`backfill-mapping` skill's step 5 passes while 23 posts stay invisible.
+
+**The tell is in the database, not the archive.** A sender change with a delivery gap:
+
+```sql
+SELECT m.sender, MIN(date), MAX(date), COUNT(*)
+FROM messages m JOIN message_labels ml ON ml.message_id = m.message_id
+WHERE ml.label_id = '...' GROUP BY m.sender ORDER BY MIN(date);
+```
+
+Two senders whose ranges do not abut mean two publications. Compare the archive's earliest
+post against the label's earliest message: if the archive starts *later* than the corpus,
+an older archive exists somewhere.
+
+**Rule:** Run the sender-timeline query before writing a mapping, and record the boundary in
+`notes` when the label spans more than one archive. A mapping holds exactly one
+`archive_url` and is keyed by label name, so a split label cannot be expressed in the
+current schema — the second archive needs a deliberate decision, not a silent omission.
