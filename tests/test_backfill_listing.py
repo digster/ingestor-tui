@@ -27,6 +27,33 @@ class FakeFetcher:
         return json.loads(self.get_text(url))
 
 
+class FakeOffsetApi:
+    """A JSON listing endpoint that honours real ``offset``/``limit`` semantics.
+
+    ``FakeFetcher`` maps literal URLs to responses, which lets a test describe a
+    server that could not exist — ``offset=2`` returning items that ``offset=0``
+    never reached. This fake slices one fixed catalogue instead, so every page
+    is consistent with every other and a skipped item is a genuine gap.
+
+    ``first_page_cap`` reproduces Substack: ``/api/v1/archive`` returns at most
+    23 posts when ``offset=0`` whatever ``limit`` asks for, and the full
+    ``limit`` at every other offset.
+    """
+
+    def __init__(self, slugs: list[str], *, first_page_cap: int | None = None) -> None:
+        self._slugs = slugs
+        self._first_page_cap = first_page_cap
+        self.requested: list[str] = []
+
+    def get_json(self, url: str) -> object:
+        self.requested.append(url)
+        query = dict(part.split("=") for part in url.split("?", 1)[1].split("&"))
+        offset, limit = int(query["offset"]), int(query["limit"])
+        if offset == 0 and self._first_page_cap is not None:
+            limit = min(limit, self._first_page_cap)
+        return json.loads(_posts(*self._slugs[offset : offset + limit]))
+
+
 def _json_mapping(**listing_overrides) -> BackfillMapping:
     listing = {
         "mode": "json",
@@ -80,7 +107,8 @@ def test_json_paginates_until_empty() -> None:
         {
             "https://x.test/api?offset=0&limit=2": _posts("one", "two"),
             "https://x.test/api?offset=2&limit=2": _posts("three"),
-            "https://x.test/api?offset=4&limit=2": "[]",
+            # The next offset is 2 + the ONE item returned, not 2 + page_size.
+            "https://x.test/api?offset=3&limit=2": "[]",
         }
     )
     refs = read_listing(_json_mapping(), fetcher)
@@ -90,7 +118,7 @@ def test_json_paginates_until_empty() -> None:
 def test_json_parses_dates_and_titles() -> None:
     fetcher = FakeFetcher(
         {"https://x.test/api?offset=0&limit=2": _posts("hello-world"),
-         "https://x.test/api?offset=2&limit=2": "[]"}
+         "https://x.test/api?offset=1&limit=2": "[]"}
     )
     ref = read_listing(_json_mapping(), fetcher)[0]
     assert ref.title == "Hello World"
@@ -101,24 +129,66 @@ def test_json_parses_dates_and_titles() -> None:
 def test_json_short_page_does_not_stop_pagination() -> None:
     """A page smaller than page_size is not the end of the archive.
 
-    Substack's endpoint returns short pages mid-archive; treating one as the
-    end truncated a 113-article archive to 23 during development.
+    Substack's endpoint returns a short first page; treating it as the end
+    truncated a 113-article archive to 23 during development.
     """
+    api = FakeOffsetApi(["one", "two", "three"], first_page_cap=1)
+    assert len(read_listing(_json_mapping(), api)) == 3
+
+
+def test_json_offset_advances_by_items_received_not_page_size() -> None:
+    """A short page must not leave a gap behind it.
+
+    Substack caps ``offset=0`` at 23 posts even for ``limit=50``. Striding by
+    page_size then requests ``offset=50`` next, and posts 23-49 are never
+    listed — with no error, and a plausible-looking non-round total.
+    """
+    slugs = [f"p{n}" for n in range(7)]
+    api = FakeOffsetApi(slugs, first_page_cap=2)
+    mapping = _json_mapping(pagination={"type": "offset", "page_size": 3, "max_pages": 10})
+
+    refs = read_listing(mapping, api)
+
+    assert [r.url.rsplit("/", 1)[-1] for r in refs] == slugs
+    assert [u.split("?", 1)[1] for u in api.requested] == [
+        "offset=0&limit=3",  # capped: returns p0, p1
+        "offset=2&limit=3",  # resumes at p2, not at offset=3
+        "offset=5&limit=3",
+        "offset=7&limit=3",  # empty: end of archive
+    ]
+
+
+def test_json_offset_respects_a_nonzero_start() -> None:
+    api = FakeOffsetApi([f"p{n}" for n in range(5)])
+    mapping = _json_mapping(
+        pagination={"type": "offset", "page_size": 2, "start": 1, "max_pages": 10}
+    )
+    assert [r.url.rsplit("/", 1)[-1] for r in read_listing(mapping, api)] == [
+        "p1", "p2", "p3", "p4",
+    ]
+
+
+def test_json_page_pagination_is_unaffected_by_short_pages() -> None:
+    """``type: page`` numbers pages, so a short one must not shift the next."""
     fetcher = FakeFetcher(
         {
-            "https://x.test/api?offset=0&limit=2": _posts("one"),
-            "https://x.test/api?offset=2&limit=2": _posts("two", "three"),
-            "https://x.test/api?offset=4&limit=2": "[]",
+            "https://x.test/api?page=1": _posts("one"),
+            "https://x.test/api?page=2": _posts("two", "three"),
+            "https://x.test/api?page=3": "[]",
         }
     )
-    assert len(read_listing(_json_mapping(), fetcher)) == 3
+    mapping = _json_mapping(
+        url_template="https://x.test/api?page={page}",
+        pagination={"type": "page", "start": 1, "max_pages": 5},
+    )
+    assert len(read_listing(mapping, fetcher)) == 3
 
 
 def test_json_items_path_resolves_nested_array() -> None:
     payload = json.dumps({"data": {"posts": json.loads(_posts("nested"))}})
     fetcher = FakeFetcher(
         {"https://x.test/api?offset=0&limit=2": payload,
-         "https://x.test/api?offset=2&limit=2": json.dumps({"data": {"posts": []}})}
+         "https://x.test/api?offset=1&limit=2": json.dumps({"data": {"posts": []}})}
     )
     refs = read_listing(_json_mapping(items_path="data.posts"), fetcher)
     assert len(refs) == 1
@@ -151,6 +221,8 @@ def test_repeated_page_stops_pagination() -> None:
 def test_duplicate_urls_within_a_page_are_deduped() -> None:
     fetcher = FakeFetcher(
         {"https://x.test/api?offset=0&limit=2": _posts("same", "same"),
+         # Two raw items, so the next page is offset=2 even though only one
+         # survived dedup — the server's offset counts what it holds.
          "https://x.test/api?offset=2&limit=2": "[]"}
     )
     assert len(read_listing(_json_mapping(), fetcher)) == 1

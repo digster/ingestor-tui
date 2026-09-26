@@ -170,7 +170,7 @@ When the sender timeline showed a split, use `sources` instead of a top-level
       "sender": "Neel Chhabra from Neel's Newsletter <neelchhabra@substack.com>",
       "listing": { "mode": "json", "...": "..." },
       "article": { "content_selector": "div.available-content" },
-      "notes": "23 posts, 2025-04-28 to 2026-05-09. The rename did not move them."
+      "notes": "37 posts, 2020-12-11 to 2026-05-09. The rename did not move them."
     }
   ],
   "notes": "Why this label is split, and where the boundary falls."
@@ -203,11 +203,19 @@ uv run ingestor-backfill validate
 uv run ingestor-backfill scan --label "Some Newsletter"
 ```
 
-Check all four before declaring it done:
+Check all of these before declaring it done:
 
 - **Listing count is plausible.** Suspiciously round numbers — exactly 10, 12, 20, 24 —
-  usually mean one page was read and pagination stopped early. Compare against what the
-  archive page shows when scrolled.
+  usually mean one page was read and pagination stopped early. On Substack, also be wary
+  of **23**: `/api/v1/archive` caps `offset=0` at 23 posts regardless of `limit`.
+- **Listing count matches an independent count.** A plausible total is not proof — a
+  pagination gap produces a non-round number. For a JSON endpoint, walk it yourself,
+  advancing by the items each page actually returned, and compare with the scan's `listed`
+  (the two can differ by a few when dedup drops repeated titles):
+
+  ```bash
+  o=0; t=0; while :; do n=$(curl -s "https://example.com/api/v1/archive?sort=new&offset=$o&limit=50" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))'); [ "$n" = 0 ] && break; t=$((t+n)); o=$((o+n)); done; echo "$t"
+  ```
 - **Every source contributed.** A multi-source scan logs one
   `Archive '<name>' contributed N article(s)` line per archive. A zero there means that
   source is misconfigured or dead, and the run will otherwise look entirely healthy.
@@ -226,6 +234,7 @@ Check all four before declaring it done:
 |---|---|---|
 | Far fewer articles than the archive shows | Client-rendered listing | Switch to `json`, or `rendered` |
 | Same articles repeat, count stalls | Pagination parameter ignored | `--check-pagination`; find the real scheme |
+| `listed` below an independent count, dates skip a block | A short page strode past (see `LEARNINGS.md`) | JSON offset mode already advances by items received; for `html` offsets, lower `page_size` to the smallest page the site returns |
 | Everything reports as missing | Wrong `label_id`, or titles differ from subjects | Re-resolve the ID; check subjects in the DB |
 | Article bodies contain site chrome | `content_selector` too broad | Narrow it; probe the article page |
 | `content_selector matched nothing` warnings | Selector went stale after a redesign | Re-probe an article page and update it |

@@ -49,9 +49,10 @@ if new_on_page == 0:
 and `ListingConfig` refuses a template whose pagination type has no matching placeholder.
 
 **Rule:** When walking any paginated remote resource, terminate on *no new results*, not on
-an empty response. And do not infer the end of a listing from a short page — Substack
-returns short pages mid-archive, and treating one as the end truncated 113 articles to 23
-during development.
+an empty response. And do not infer the end of a listing from a short page — Substack's
+first page is short, and treating it as the end truncated 113 articles to 23 during
+development. (That fix was itself only half right: see "A short page leaves a gap if you
+stride past it" below.)
 
 ## Scraping: a client-rendered archive looks fine to `curl`
 
@@ -198,7 +199,8 @@ at a URL the mapping never visits.
 
 **Cause:** `Neel Chhabra` (`Label_1703214449706674033`) is one Gmail label fed by two
 Substack publications. Posts up to 2026-05-09 went out as *Neel's Newsletter* from
-`neelchhabra@substack.com` and live at `neelchhabra.substack.com` (23 posts). From
+`neelchhabra@substack.com` and live at `neelchhabra.substack.com` (37 posts — first
+recorded as 23, which was the offset-stride bug below hiding 14 of them). From
 2026-07-20 the publication is *Resight*, sending from `resight@substack.com` and publishing
 at `resight.substack.com` (7 posts). The rename did **not** carry the back catalogue to the
 new subdomain.
@@ -239,3 +241,46 @@ worth keeping in mind when authoring one:
   catalogue, both archives list the same post at different URLs — and different URLs mint
   different `web-` IDs, so URL-only dedup would write the article twice. Earlier sources
   win, which is why `sources[0]` should be the canonical archive.
+
+## A short page leaves a gap if you stride past it
+
+**Symptom:** A JSON-mode backfill lists a plausible, non-round number of articles — 119,
+58, 30 — while a contiguous block of the archive is never listed. Nothing errors, and the
+"no new URLs" guard never fires, because every page that *is* read is new.
+
+**Cause:** Substack's `/api/v1/archive` returns **at most 23 posts when `offset=0`**,
+whatever `limit` asks for, and the full `limit` at every other offset. Measured
+2026-09-26 on four publications, identically:
+
+```
+offset=0&limit=50   -> 23      offset=1&limit=50  -> 50
+offset=0&limit=24   -> 23      offset=12&limit=24 -> 24
+```
+
+The reader computed offsets as `start + page * page_size`, so after that 23-item page it
+asked for `offset=50` and posts 23-49 were never requested. The earlier "short page is not
+the end" fix (above) is what made this silent: before it, the walk *stopped* at 23, which is
+at least obviously wrong; after it, the walk resumed at 50 and produced a total that looked
+complete. Real cost across the three mappings at the time:
+
+| Archive | True size | Listed | Hidden |
+|---|---|---|---|
+| The India Notes | 85 | 58 | 27 |
+| joanwestenberg.com | 148 | 121 | 27 — all of July 2026 |
+| neelchhabra.substack.com | 37 | 23 | 14 — and the label scanned as "0 missing" |
+
+**Fix:** `_read_json` advances by `len(items)` — the *raw* item count, before dedup or
+URL filtering, since that is what the server's offset counts. Identical to the old stride
+whenever pages are full. HTML modes still stride by `page_size`: their item count is what
+the selectors matched, not what the server returned, so there is nothing truer to use.
+
+**Why the tests did not catch it:** fixtures mapped literal URLs to responses, so they
+could describe an impossible server — `offset=0` returning 1 item and `offset=2` returning
+items 2-3, with nothing at offset 1. `FakeOffsetApi` in `tests/test_backfill_listing.py`
+slices one fixed catalogue instead, so a skipped item is a real gap the test can see.
+
+**Rule:** For offset pagination, the next offset is `offset + items_received`, never
+`offset + page_size`. And when a fake stands in for a paginated API, derive every page from
+one underlying list — hand-written page fixtures will happily encode the bug as correct.
+When authoring a mapping, count the archive independently (walk the endpoint with `curl`)
+and compare it to the scan's `listed`.

@@ -78,10 +78,14 @@ def _posts(host: str, *titles: str) -> list[dict]:
 
 
 def _page(host: str, *titles: str) -> dict:
-    """Responses for a single-page archive: page 1 has posts, page 2 is empty."""
+    """Responses for a single-page archive: page 1 has posts, page 2 is empty.
+
+    Page 2 sits at ``offset=len(titles)`` — the reader resumes after the items
+    it actually received, not after a full ``page_size``.
+    """
     return {
         f"https://{host}/api?offset=0&limit=50": _posts(host, *titles),
-        f"https://{host}/api?offset=50&limit=50": [],
+        f"https://{host}/api?offset={len(titles)}&limit=50": [],
     }
 
 
@@ -227,9 +231,9 @@ def test_listing_dedupes_the_same_url_across_sources() -> None:
     fetcher = FakeFetcher(
         {
             "https://a.test/api?offset=0&limit=50": [shared],
-            "https://a.test/api?offset=50&limit=50": [],
+            "https://a.test/api?offset=1&limit=50": [],
             "https://b.test/api?offset=0&limit=50": [shared],
-            "https://b.test/api?offset=50&limit=50": [],
+            "https://b.test/api?offset=1&limit=50": [],
         }
     )
 
@@ -269,7 +273,8 @@ def test_a_fully_overlapping_source_does_not_stop_the_walk_early() -> None:
         {
             **_page("new.test", "Shared A", "Shared B"),
             "https://old.test/api?offset=0&limit=50": _posts("old.test", "Shared A", "Shared B"),
-            "https://old.test/api?offset=50&limit=50": _posts("old.test", "Genuinely Old"),
+            "https://old.test/api?offset=2&limit=50": _posts("old.test", "Genuinely Old"),
+            "https://old.test/api?offset=3&limit=50": [],
         }
     )
 

@@ -144,7 +144,7 @@ def make_runner(mapping_store: MappingStore, **kwargs) -> BackfillRunner:
 
 ONE_PAGE = {
     "https://x.test/api?offset=0&limit=10": archive_json("Already Held", "A New Post"),
-    "https://x.test/api?offset=10&limit=10": "[]",
+    "https://x.test/api?offset=2&limit=10": "[]",
 }
 
 
@@ -212,7 +212,7 @@ def test_dry_run_writes_nothing(project, mapping_store, stub_fetcher) -> None:
 def test_limit_caps_writes_not_listing(project, mapping_store, stub_fetcher) -> None:
     stub_fetcher({
         "https://x.test/api?offset=0&limit=10": archive_json("New One", "New Two", "New Three"),
-        "https://x.test/api?offset=10&limit=10": "[]",
+        "https://x.test/api?offset=3&limit=10": "[]",
     })
     result = make_runner(mapping_store).run("Example", limit=2)
 
@@ -239,7 +239,7 @@ def test_rerun_is_idempotent(project, mapping_store, stub_fetcher) -> None:
 def test_failed_article_does_not_stop_the_run(project, mapping_store, stub_fetcher) -> None:
     stub_fetcher(
         {"https://x.test/api?offset=0&limit=10": archive_json("Good One", "Bad One"),
-         "https://x.test/api?offset=10&limit=10": "[]"},
+         "https://x.test/api?offset=2&limit=10": "[]"},
         fail={"https://x.test/p/bad-one"},
     )
     result = make_runner(mapping_store).run("Example")
@@ -255,13 +255,13 @@ def test_failed_article_is_retried_next_run(project, mapping_store, stub_fetcher
     """A 404 today may be a live page tomorrow, so failures stay eligible."""
     stub_fetcher(
         {"https://x.test/api?offset=0&limit=10": archive_json("Flaky"),
-         "https://x.test/api?offset=10&limit=10": "[]"},
+         "https://x.test/api?offset=1&limit=10": "[]"},
         fail={"https://x.test/p/flaky"},
     )
     assert make_runner(mapping_store).run("Example").failed == 1
 
     stub_fetcher({"https://x.test/api?offset=0&limit=10": archive_json("Flaky"),
-                  "https://x.test/api?offset=10&limit=10": "[]"})
+                  "https://x.test/api?offset=1&limit=10": "[]"})
     assert make_runner(mapping_store).run("Example").written == 1
 
 
@@ -269,7 +269,7 @@ def test_stop_halts_between_articles(project, mapping_store, stub_fetcher) -> No
     """Completed work is committed; nothing is left half-written."""
     stub_fetcher({
         "https://x.test/api?offset=0&limit=10": archive_json("One", "Two", "Three"),
-        "https://x.test/api?offset=10&limit=10": "[]",
+        "https://x.test/api?offset=3&limit=10": "[]",
     })
 
     def should_stop() -> bool:
@@ -373,9 +373,9 @@ def _two_archives(*, new: str, old: str) -> dict[str, str]:
 
     return {
         "https://new.test/api?offset=0&limit=10": posts("new.test", new),
-        "https://new.test/api?offset=10&limit=10": "[]",
+        "https://new.test/api?offset=1&limit=10": "[]",
         "https://old.test/api?offset=0&limit=10": posts("old.test", old),
-        "https://old.test/api?offset=10&limit=10": "[]",
+        "https://old.test/api?offset=1&limit=10": "[]",
     }
 
 

@@ -186,7 +186,14 @@ def _read_source(
 
 
 def _page_urls(cfg: ListingConfig) -> Iterator[str]:
-    """Yield successive listing page URLs according to the pagination config."""
+    """Yield successive listing page URLs according to the pagination config.
+
+    Offset pages here stride by ``page_size``, which assumes every page is
+    full. That holds for the HTML readers — whose item count is whatever the
+    selectors matched, not what the server returned, so there is nothing more
+    accurate to advance by. ``json`` mode can see the true count and does not
+    use this path for offsets; see ``_read_json``.
+    """
     pagination = cfg.pagination
 
     if pagination.type == "none":
@@ -207,22 +214,60 @@ def _page_urls(cfg: ListingConfig) -> Iterator[str]:
 
 
 def _read_json(cfg: ListingConfig, fetcher: Fetcher) -> Iterator[list[ArticleRef]]:
-    """Read a JSON listing endpoint, one page per request."""
-    for url in _page_urls(cfg):
-        payload = fetcher.get_json(url)
-        items = dotted_get(payload, cfg.items_path)
+    """Read a JSON listing endpoint, one page per request.
 
-        if items is None:
-            logger.warning("items_path %r matched nothing at %s", cfg.items_path, url)
-            return
-        if not isinstance(items, list):
-            raise ListingError(
-                f"items_path {cfg.items_path!r} resolved to {type(items).__name__}, expected a list"
-            )
+    **Offset pagination advances by the number of items actually returned**,
+    never by ``page_size``. A server may legitimately return fewer than
+    ``limit`` items mid-archive, and striding past them leaves a silent gap.
+    Substack does exactly this: ``/api/v1/archive?offset=0`` returns at most 23
+    posts for any ``limit``, so a ``page_size`` stride of 50 jumped straight to
+    ``offset=50`` and posts 23-49 were never listed — no error, and a total
+    that did not look truncated. Resuming at ``offset + len(items)`` is correct
+    for any server that honours offset semantics, and identical to the old
+    stride whenever pages come back full.
+    """
+    pagination = cfg.pagination
+    if pagination.type != "offset":
+        # Page numbers and single pages are fixed in advance; a short page
+        # does not change which page comes next.
+        for url in _page_urls(cfg):
+            items = _json_items(cfg, fetcher, url)
+            if not items:
+                return
+            yield [_ref_from_json(item, cfg.fields) for item in items]
+        return
+
+    offset = pagination.start
+    for _ in range(pagination.max_pages):
+        url = cfg.url_template.format(offset=offset, limit=pagination.page_size)
+        items = _json_items(cfg, fetcher, url)
         if not items:
             return
-
         yield [_ref_from_json(item, cfg.fields) for item in items]
+        # Raw item count, not refs kept: the server's offset counts every item
+        # it holds, including any we later drop for a missing URL or as a dupe.
+        offset += len(items)
+
+
+def _json_items(cfg: ListingConfig, fetcher: Fetcher, url: str) -> list[Any] | None:
+    """Fetch one JSON listing page and return its item array.
+
+    Returns ``None`` (after logging) when ``items_path`` matches nothing, which
+    the caller treats like an empty page: the end of the listing.
+
+    Raises:
+        ListingError: ``items_path`` resolved to something other than a list.
+    """
+    items = dotted_get(fetcher.get_json(url), cfg.items_path)
+
+    if items is None:
+        logger.warning("items_path %r matched nothing at %s", cfg.items_path, url)
+        return None
+    if not isinstance(items, list):
+        raise ListingError(
+            f"items_path {cfg.items_path!r} resolved to {type(items).__name__}, expected a list"
+        )
+    return items
 
 
 def _ref_from_json(item: Any, fields: dict[str, Any]) -> ArticleRef:
