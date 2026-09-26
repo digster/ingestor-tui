@@ -119,6 +119,34 @@
         "date_attr": "datetime"
       },
       "notes": "Substack on a custom domain (newsletter.theindianotes.com); formerly 'Design for India'. Single sender, one archive: 85 posts from 2021-03-07, far older than the label's first email (2026-06-22), so nearly all of it is backfill. Mode is 'json': the HTML archive server-renders only 13 posts. The API returns at most 23 posts at offset=0 whatever 'limit' asks for — the reader resumes at offset + items received, so page_size 50 is safe. Includes one 'thread'-type post ([Discussion #1], 2022-11-04) that is a discussion prompt with little body. title_selector is 'h1.post-title' because the page's first <h1> is an empty wordmark header."
+    },
+    "Nabeel Qureshi": {
+      "label_id": "Label_2768118641859383776",
+      "archive_url": "https://nabeelqu.substack.com/archive",
+      "sender": "Nabeel Qureshi <nabeelqu@substack.com>",
+      "listing": {
+        "mode": "json",
+        "url_template": "https://nabeelqu.substack.com/api/v1/archive?sort=new&offset={offset}&limit={limit}",
+        "pagination": {
+          "type": "offset",
+          "page_size": 50,
+          "start": 0,
+          "max_pages": 40
+        },
+        "items_path": "",
+        "fields": {
+          "url": "canonical_url",
+          "title": "title",
+          "date": "post_date"
+        }
+      },
+      "article": {
+        "content_selector": "div.available-content",
+        "title_selector": "h1.post-title",
+        "date_selector": "time[datetime]",
+        "date_attr": "datetime"
+      },
+      "notes": "Substack ('Nabeel S. Qureshi'). Single sender, one archive: 14 posts, 2019-12-15 to 2026-05-03, all public and all returned in one API page. The label holds only 3 of them plus the 2024-12-03 welcome email (subscribed long after most posts went out), so this is mostly backfill. Mode is 'json': the HTML archive server-renders 12 posts, which is short of the full 14, so mode 'html' would silently drop the two oldest. title_selector is 'h1.post-title' because the page's first <h1> is the publication wordmark ('Nabeel S. Qureshi'), which would title every article the same."
     }
   }
 }

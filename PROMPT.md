@@ -68,3 +68,5 @@ lifespan. add support for more than one archive urls for a label. use Neel Chhab
 example."
 
 Add backfill mapping for Dharmesh Ba - https://newsletter.theindianotes.com/archive
+
+Add backfill mapping for Nabeel Qureshi - https://nabeelqu.substack.com/archive
