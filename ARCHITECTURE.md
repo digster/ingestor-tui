@@ -104,6 +104,7 @@ Labels → Operations copy flow:
 | JSON offset pagination advances by items **received**, not `page_size` | Substack's `/api/v1/archive` returns at most 23 posts at `offset=0` for any `limit`. Striding by `page_size` skipped posts 23–49 on every Substack mapping with no error. HTML modes keep the `page_size` stride — selector matches are not a server item count |
 | Backfill shares the `"pipeline"` worker group | The existing Stop button and `_cancel_operation()` apply unchanged, and a backfill can never run concurrently with an ingest |
 | Backfilled HTML carries its own stylesheet | The viewer iframe supplies none, and a scraped page's CSS lives on the publisher's CDN. Reusing gmail-ingestor's writers guaranteed the *markdown* matched — but the markdown is not what gets rendered |
+| Substack embeds are rewritten **before** markdown conversion (`embeds.py`) | trafilatura discards any element whose class contains `embed`, `meta`, `author`…, so embedded-post, digest and publication cards vanished from the markdown while their lead-ins stayed. Rewriting in the extractor, not the writer, fixes both artifacts with one markup: the stored HTML also loses a card that rendered as an unstyled blob of link text without Substack's CSS |
 | `record_article` never downgrades `done` | `classify` reports an already-backfilled URL as `have`, and the runner records every classified entry. Letting that overwrite `done` lost the file paths, hid the files from `prune`, and made the article churn done → have → discovered → done |
 | `prune` reaches into `../newsletters` | `ingestor-tools` only ever *copies*, skipping files already present. Rewriting `../output` alone never propagates — the stale copy is what gets published |
 | Title matching, never date matching | Publication and delivery timestamps differ by hours; near a month boundary a date comparison is actively wrong |
@@ -125,6 +126,7 @@ Labels → Operations copy flow:
 | `src/ingestor_tui/backfill/mappings.py` | Load/validate/write `backfill_mappings.json` |
 | `src/ingestor_tui/backfill/listing.py` | html/json/rendered listing readers + the pagination guard |
 | `src/ingestor_tui/backfill/extractor.py` | Article page → title, date, clean content fragment |
+| `src/ingestor_tui/backfill/embeds.py` | Rewrites Substack embed cards/media into markup trafilatura keeps |
 | `src/ingestor_tui/backfill/matcher.py` | Normalised title matching against the existing corpus |
 | `src/ingestor_tui/backfill/writer.py` | Converts and writes via gmail-ingestor's own writers |
 | `src/ingestor_tui/backfill/store.py` | `backfill.db` state (articles + runs) |
@@ -204,6 +206,14 @@ Two rules follow from how the viewer works, both easy to break by accident:
 * **Interactive chrome is stripped** (`button`, `[role=button]`, form controls). It is inert
   under the iframe's sandbox and renders as stray glyphs without the site's CSS. Overridable
   per publication via `article.strip_selectors`.
+
+The same HTML is also the input to the markdown converter, and trafilatura's heuristics
+decide what reaches the `.md`. `embeds.rewrite_embeds` runs before stripping and turns each
+Substack embed — found by `data-component-name`, read from its `data-attrs` JSON — into a
+labelled line (`Embedded post: <a>title</a> — byline`), plus a quoted excerpt for posts.
+YouTube and Instagram iframes are kept, with a link added after them. The markup it emits is
+constrained by three trafilatura behaviours — no classes, no links inside `<blockquote>`, and
+a plain-text label on every link line — documented in the module docstring and LEARNINGS.
 
 Beyond that, backfilled artifacts are indistinguishable from ingested ones to downstream
 tools, except for the ID shape and two extra front-matter keys:

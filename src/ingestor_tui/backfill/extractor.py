@@ -17,8 +17,9 @@ browser defaults while the emails beside them looked right.
 
 So the pipeline here is: narrow to the content subtree (full site chrome would
 be noise in a viewer, and trafilatura produces markedly better text from a
-narrowed subtree), strip the interactive chrome that subtree carries, then
-supply our own fallback stylesheet.
+narrowed subtree), rewrite embed cards that the markdown converter would
+otherwise discard (see ``embeds``), strip the interactive chrome that subtree
+carries, then supply our own fallback stylesheet.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from datetime import datetime
 from lxml import etree
 from lxml import html as lxml_html
 
+from ingestor_tui.backfill.embeds import rewrite_embeds
 from ingestor_tui.backfill.fetcher import Fetcher
 from ingestor_tui.backfill.mappings import ArticleConfig
 from ingestor_tui.backfill.models import ArticleRef, ExtractedArticle
@@ -302,6 +304,9 @@ def _extract_content(
         element = body[0] if body else tree
         logger.warning("No content container matched at %s — storing full body", url)
 
+    # Before stripping and pruning, so both see the rewritten markup: the
+    # replacements are plain <p>/<blockquote> that neither pass touches.
+    rewrite_embeds(element, url)
     _strip_noise(element, config.strip_selectors or DEFAULT_STRIP_SELECTORS)
     _drop_empty_containers(element)
 

@@ -162,6 +162,11 @@ generates for emails that arrived without an HTML part. Site chrome — buttons,
 subscribe forms — is stripped; set `article.strip_selectors` in a mapping to override the
 default list for a publication whose real content uses those elements.
 
+Substack embeds are kept rather than lost in conversion: an embedded post, a "read full
+story" digest card or a recommended publication becomes a labelled link line —
+`Embedded post: [title](url) — author · publication` — with the post's excerpt quoted below
+it, and YouTube and Instagram embeds gain an `Embedded media:` link to the original.
+
 Subscriber-only posts are still archived for their title and opening lines, with a footer
 noting that the body is a public preview and linking to the source.
 
