@@ -688,6 +688,17 @@ def test_build_cli_command_backfill_run_omits_false_dry_run() -> None:
     assert result == "ingestor-backfill run --label Example --limit 2"
 
 
+def test_build_cli_command_backfill_prune_preview() -> None:
+    """The preview is the CLI's default, so it carries no --yes."""
+    result = _build_cli_command("backfill_prune", {"label_name": "Dharmesh Ba", "yes": False})
+    assert result == 'ingestor-backfill prune --label "Dharmesh Ba"'
+
+
+def test_build_cli_command_backfill_prune_applied() -> None:
+    result = _build_cli_command("backfill_prune", {"label_name": "Dharmesh Ba", "yes": True})
+    assert result == 'ingestor-backfill prune --label "Dharmesh Ba" --yes'
+
+
 def test_build_cli_command_gmail_program_unchanged() -> None:
     """Adding backfill must not change how Gmail commands render."""
     result = _build_cli_command(

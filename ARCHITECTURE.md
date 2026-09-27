@@ -79,6 +79,23 @@ Backfill flow:
     → shares the "pipeline" worker group with Gmail ops, so the existing Stop
       button works and the two pipelines can never run concurrently
 
+Backfill prune flow (two workers, a confirmation between them):
+    "Prune" button → posts BackfillRequested(operation="prune")
+    → _start_prune(): set_running(cancellable=False) — prune_label has no
+      stop hook, so Stop stays disabled rather than promising a stop
+    → _do_prune_plan worker: prune_label(dry_run=True)
+        (a worker because planning globs output/markdown once per article —
+         seconds against ~17K files)
+    → _on_prune_planned (main thread): BackfillWidget.populate_prune() shows
+      the targets in the results table, then
+        ├─ nothing to prune  → stop, no dialog
+        ├─ "Dry run" ticked  → stop, no dialog (mirrors Backfill)
+        └─ ConfirmDialog(destructive=True, confirm_label="Prune"), Cancel focused
+             → _do_prune worker: prune_label(dry_run=False) re-plans against
+               the disk as it is at confirmation time, then deletes
+             → populate_prune() marks rows "removed"; _load_mappings() refreshes
+               the State column
+
 Labels → Operations copy flow:
     User clicks rows in Labels DataTable → toggles _selected_ids set
     → "Copy to Operations" button → posts LabelsSelected message
@@ -103,6 +120,8 @@ Labels → Operations copy flow:
 | Listing pagination stops on "no new URLs" | Substack accepts `?offset=N` on its HTML archive and returns page 1 again. Without this guard a mapping would loop to max_pages, or worse, report a truncated read as complete |
 | JSON offset pagination advances by items **received**, not `page_size` | Substack's `/api/v1/archive` returns at most 23 posts at `offset=0` for any `limit`. Striding by `page_size` skipped posts 23–49 on every Substack mapping with no error. HTML modes keep the `page_size` stride — selector matches are not a server item count |
 | Backfill shares the `"pipeline"` worker group | The existing Stop button and `_cancel_operation()` apply unchanged, and a backfill can never run concurrently with an ingest |
+| TUI prune always previews before it asks | The results table lists exactly which articles will go before the dialog opens, the same look-before-committing rule as Scan → Backfill. The destructive dialog focuses Cancel so a reflexive Enter backs out |
+| TUI tests that prune use an email-analyzer-shaped tree | Prune's defaults are *relative* (`../newsletters`, `../output/...`). A test project at `<tmp>` would resolve them to `<tmp>/..` — outside the sandbox — so `tests/test_backfill_prune_tui.py` puts the project at `<tmp>/gmail-ingestor` |
 | Backfilled HTML carries its own stylesheet | The viewer iframe supplies none, and a scraped page's CSS lives on the publisher's CDN. Reusing gmail-ingestor's writers guaranteed the *markdown* matched — but the markdown is not what gets rendered |
 | Substack embeds are rewritten **before** markdown conversion (`embeds.py`) | trafilatura discards any element whose class contains `embed`, `meta`, `author`…, so embedded-post, digest and publication cards vanished from the markdown while their lead-ins stayed. Rewriting in the extractor, not the writer, fixes both artifacts with one markup: the stored HTML also loses a card that rendered as an unstyled blob of link text without Substack's CSS |
 | `record_article` never downgrades `done` | `classify` reports an already-backfilled URL as `have`, and the runner records every classified entry. Letting that overwrite `done` lost the file paths, hid the files from `prune`, and made the article churn done → have → discovered → done |
@@ -118,11 +137,11 @@ Labels → Operations copy flow:
 | `src/ingestor_tui/widgets/dashboard.py` | Status cards, last run, config display |
 | `src/ingestor_tui/widgets/operations.py` | Pipeline buttons, inputs, progress bar |
 | `src/ingestor_tui/widgets/labels.py` | Gmail labels DataTable with filter |
-| `src/ingestor_tui/widgets/confirm_dialog.py` | Reusable ModalScreen confirmation dialog |
+| `src/ingestor_tui/widgets/confirm_dialog.py` | Reusable ModalScreen confirmation dialog; `destructive=True` for irreversible actions |
 | `src/ingestor_tui/widgets/preset_name_dialog.py` | Modal dialog for entering preset name |
 | `src/ingestor_tui/widgets/log_panel.py` | RichLog + TUILogHandler |
 | `src/ingestor_tui/preset_store.py` | JSON persistence for label presets (~/.config/ingestor-tui/) |
-| `src/ingestor_tui/widgets/backfill.py` | Mapping browser, scan results, backfill controls |
+| `src/ingestor_tui/widgets/backfill.py` | Mapping browser, scan results / prune preview, backfill and prune controls |
 | `src/ingestor_tui/backfill/mappings.py` | Load/validate/write `backfill_mappings.json` |
 | `src/ingestor_tui/backfill/listing.py` | html/json/rendered listing readers + the pagination guard |
 | `src/ingestor_tui/backfill/extractor.py` | Article page → title, date, clean content fragment |

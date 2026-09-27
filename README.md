@@ -38,7 +38,7 @@ Press `q` to quit.
 - **Dashboard**: Auto-refreshing status overview (pending/fetched/converted/failed counts), last fetch run details, configuration display, and editable project directory.
 - **Operations**: Buttons for Full Fetch, Discover, Fetch Pending, Convert Pending, Retry Failed, and Stop. Confirmation dialog before running operations. Supports multiple comma-separated labels for Discover and Full Fetch. Configurable parameters (label, query, limit, offset, batch size). Real-time progress bar updates. **Label Presets**: Save, load, and delete named label presets that persist across sessions (`~/.config/ingestor-tui/label_presets.json`).
 - **Labels**: Browse available Gmail labels in a sortable DataTable with real-time search/filter.
-- **Backfill**: Fill gaps in a newsletter's history from the publication's own web archive — for authors who moved platforms, back catalogues we subscribed to late, or posts that were never emailed. Pick a mapped label, **Scan** to see what is missing versus already held, then **Backfill** to fetch and write the gaps. See [Backfill](#backfill) below.
+- **Backfill**: Fill gaps in a newsletter's history from the publication's own web archive — for authors who moved platforms, back catalogues we subscribed to late, or posts that were never emailed. Pick a mapped label, **Scan** to see what is missing versus already held, then **Backfill** to fetch and write the gaps. **Prune** removes what earlier runs wrote so a label can be regenerated: it lists the articles it would delete, then asks before deleting (tick **Dry run** to preview only). See [Backfill](#backfill) below.
 - **Log Panel**: All `gmail_ingestor.*` and `ingestor_tui.*` log output piped into a RichLog widget with syntax highlighting.
 
 ## Backfill
@@ -124,7 +124,12 @@ uv run ingestor-backfill run   --label "Name"
 # then: ingestor-tools' organizer, then newsletters-web's build_site.py
 ```
 
-It reaches into `../newsletters` (override with `--newsletters-dir`) because
+In the TUI, the **Prune** button on the Backfill tab does the same: the results table shows
+the preview, and a confirmation dialog (Cancel focused) gates the delete. After it finishes,
+press **Backfill** to regenerate the label.
+
+It reaches into `../newsletters` (override with `--newsletters-dir`; the TUI always uses the
+default) because
 `ingestor-tools` only ever *copies*, skipping files already present — so rewriting
 `../output` alone never reaches the site. Articles matched to a Gmail message are left
 alone unless files exist on disk for them.

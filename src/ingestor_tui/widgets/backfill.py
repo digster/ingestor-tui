@@ -6,6 +6,11 @@ Scan is deliberately a separate button from Backfill — reading an archive is
 free and reversible, writing 80 files into the corpus is not, so the operator
 always gets to look before committing.
 
+Prune follows the same rule in the other direction. It removes what earlier
+runs wrote, so a label can be regenerated after the extractor changes. The
+results table first shows exactly which articles would go, and the app then
+asks for confirmation before anything is deleted.
+
 Selection follows the LabelsWidget pattern (row click toggles, action bar
 reflects it) so the two tables behave the same way.
 """
@@ -19,14 +24,15 @@ from textual.widgets import Button, Checkbox, DataTable, Input, Label, ProgressB
 
 from ingestor_tui.backfill.mappings import BackfillMapping
 from ingestor_tui.backfill.models import ScanEntry
+from ingestor_tui.backfill.prune import PruneResult
 
 
 class BackfillRequested(Message):
-    """Posted when the user starts a scan or a backfill run."""
+    """Posted when the user starts a scan, a backfill run, or a prune."""
 
     def __init__(self, label_name: str, operation: str) -> None:
         self.label_name = label_name
-        self.operation = operation  # "scan" | "backfill"
+        self.operation = operation  # "scan" | "backfill" | "prune"
         super().__init__()
 
 
@@ -102,6 +108,9 @@ class BackfillWidget(Vertical):
             yield Button("Reload Mappings", id="btn-backfill-reload", variant="default")
             yield Button("Scan", id="btn-backfill-scan", variant="primary", disabled=True)
             yield Button("Backfill", id="btn-backfill-run", variant="success", disabled=True)
+            # Warning rather than error: Stop already owns red on this bar, and
+            # the confirmation dialog is where the destructive styling belongs.
+            yield Button("Prune", id="btn-backfill-prune", variant="warning", disabled=True)
             yield Button("Stop", id="btn-backfill-stop", variant="error", disabled=True)
 
         with Horizontal(classes="backfill-options"):
@@ -204,6 +213,56 @@ class BackfillWidget(Vertical):
             # The row may have been cleared by a concurrent rescan.
             pass
 
+    def populate_prune(self, result: PruneResult) -> None:
+        """Show a prune's targets in the results table: a preview or what went.
+
+        Reuses the scan table because a prune preview answers the same kind of
+        question a scan does — which articles, and in what state — just before
+        a destructive step instead of a constructive one.
+        """
+        self._entries = []  # the table no longer shows scan entries
+        table = self.query_one("#scan-table", DataTable)
+        table.clear()
+
+        status = "prune" if result.dry_run else "removed"
+        for target in result.targets:
+            if target.is_present:
+                detail = (
+                    f"{target.status} · {len(target.files)} file(s), "
+                    f"{len(target.directories)} folder(s)"
+                )
+            else:
+                # A row whose files are already gone (a partial prune, or a
+                # manual deletion). Its database row is still cleared.
+                detail = f"{target.status} · nothing on disk"
+            table.add_row(
+                status,
+                target.published_at or "—",
+                target.title,
+                detail,
+                key=target.article_id,
+            )
+
+        summary = self.query_one("#backfill-summary", Static)
+        if not result.targets:
+            summary.update(f"{result.label}: nothing backfilled — nothing to prune")
+            return
+
+        counts = (
+            f"{result.files_removed} file(s), "
+            f"{result.directories_removed} newsletter folder(s), "
+            f"{result.rows_removed} database row(s)"
+        )
+        if result.dry_run:
+            summary.update(
+                f"Prune preview · {len(result.targets)} backfilled article(s) · "
+                f"[bold]would remove {counts}[/bold]"
+            )
+        else:
+            summary.update(
+                f"Pruned {len(result.targets)} article(s) · [bold]removed {counts}[/bold]"
+            )
+
     @staticmethod
     def _entry_date(entry: ScanEntry) -> str:
         return entry.ref.published_at.strftime("%Y-%m-%d") if entry.ref.published_at else ""
@@ -229,6 +288,7 @@ class BackfillWidget(Vertical):
         )
         self.query_one("#btn-backfill-scan", Button).disabled = not has_selection
         self.query_one("#btn-backfill-run", Button).disabled = not has_selection
+        self.query_one("#btn-backfill-prune", Button).disabled = not has_selection
 
     @property
     def selected_label(self) -> str | None:
@@ -243,6 +303,9 @@ class BackfillWidget(Vertical):
         elif event.button.id == "btn-backfill-run" and self._selected:
             event.stop()
             self.post_message(BackfillRequested(self._selected, "backfill"))
+        elif event.button.id == "btn-backfill-prune" and self._selected:
+            event.stop()
+            self.post_message(BackfillRequested(self._selected, "prune"))
 
     def get_params(self) -> dict:
         """Collect run parameters from the inputs."""
@@ -253,13 +316,18 @@ class BackfillWidget(Vertical):
             "dry_run": self.query_one("#cb-backfill-dry-run", Checkbox).value,
         }
 
-    def set_running(self, running: bool) -> None:
-        """Toggle controls for the duration of a run; Stop is the inverse."""
+    def set_running(self, running: bool, *, cancellable: bool = True) -> None:
+        """Toggle controls for the duration of a run; Stop is the inverse.
+
+        ``cancellable=False`` keeps Stop disabled for operations that do not
+        check for cancellation (prune), so the button never promises a stop
+        that will not happen.
+        """
         has_selection = self._selected is not None
-        self.query_one("#btn-backfill-stop", Button).disabled = not running
+        self.query_one("#btn-backfill-stop", Button).disabled = not (running and cancellable)
         self.query_one("#btn-backfill-reload", Button).disabled = running
-        self.query_one("#btn-backfill-scan", Button).disabled = running or not has_selection
-        self.query_one("#btn-backfill-run", Button).disabled = running or not has_selection
+        for button_id in ("#btn-backfill-scan", "#btn-backfill-run", "#btn-backfill-prune"):
+            self.query_one(button_id, Button).disabled = running or not has_selection
 
     def update_progress(self, stage: str, current: int = 0, total: int = 0) -> None:
         """Update the stage label and progress bar."""

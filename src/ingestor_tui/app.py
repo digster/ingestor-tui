@@ -21,6 +21,7 @@ from gmail_ingestor.pipeline.ingestor import EmailIngestor
 
 from ingestor_tui.backfill.mappings import MappingError, MappingStore
 from ingestor_tui.backfill.models import BackfillProgress
+from ingestor_tui.backfill.prune import DEFAULT_NEWSLETTERS_DIR, PruneResult, prune_label
 from ingestor_tui.backfill.runner import BackfillRunner
 from ingestor_tui.backfill.store import BackfillTracker
 from ingestor_tui.widgets.backfill import BackfillRequested, BackfillWidget
@@ -43,10 +44,11 @@ _OPERATION_CLI_COMMANDS: dict[str, str] = {
     # carries that program name rather than "gmail-ingestor".
     "backfill_scan": "scan",
     "backfill_run": "run",
+    "backfill_prune": "prune",
 }
 
 # Operations served by the ingestor-backfill CLI rather than gmail-ingestor.
-_BACKFILL_OPERATIONS = frozenset({"backfill_scan", "backfill_run"})
+_BACKFILL_OPERATIONS = frozenset({"backfill_scan", "backfill_run", "backfill_prune"})
 
 # Defines which CLI flags each operation supports
 _OPERATION_CLI_FLAGS: dict[str, list[str]] = {
@@ -57,6 +59,8 @@ _OPERATION_CLI_FLAGS: dict[str, list[str]] = {
     "retry_failed": [],
     "backfill_scan": ["label_name", "limit"],
     "backfill_run": ["label_name", "limit", "dry_run"],
+    # The preview is the CLI's default; only the applied prune carries --yes.
+    "backfill_prune": ["label_name", "yes"],
 }
 
 # Maps param keys to their CLI flag format
@@ -69,7 +73,11 @@ _PARAM_TO_FLAG: dict[str, str] = {
     "batch_size": "--batch-size",
     "label_name": "--label",
     "dry_run": "--dry-run",
+    "yes": "--yes",
 }
+
+# Boolean params rendered as a bare flag, and only when True.
+_BOOLEAN_PARAMS = frozenset({"force_full_sync", "dry_run", "yes"})
 
 
 def _build_cli_command(operation: str, params: dict) -> str:
@@ -85,7 +93,7 @@ def _build_cli_command(operation: str, params: dict) -> str:
         value = params.get(key)
         flag = _PARAM_TO_FLAG[key]
 
-        if key in ("force_full_sync", "dry_run"):
+        if key in _BOOLEAN_PARAMS:
             # Boolean flag — only include when True
             if value:
                 parts.append(flag)
@@ -161,6 +169,10 @@ class IngestorApp(App):
         self._ingestor: EmailIngestor | None = None
         self._refresh_timer = None
         self._mapping_store = MappingStore()
+        # Relative, like the CLI's default: resolved against the project dir
+        # the app chdirs into, which is also where GMAIL_OUTPUT_*_DIR's own
+        # "../output/..." resolve from — so all three agree by construction.
+        self._newsletters_dir = DEFAULT_NEWSLETTERS_DIR
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -551,9 +563,12 @@ class IngestorApp(App):
         widget.populate_mappings(mappings, state)
 
     def on_backfill_requested(self, event: BackfillRequested) -> None:
-        """Scan runs immediately; a real backfill asks first."""
+        """Scan runs immediately; a real backfill asks first; prune previews first."""
         if event.operation == "scan":
             self._start_backfill(event.label_name, scan_only=True)
+            return
+        if event.operation == "prune":
+            self._start_prune(event.label_name)
             return
 
         params = self.query_one("#backfill", BackfillWidget).get_params()
@@ -692,6 +707,167 @@ class IngestorApp(App):
 
         finally:
             self.call_from_thread(widget.set_running, False)
+
+    # --- Backfill: prune ---
+    #
+    # Two workers with a confirmation between them:
+    #
+    #   Prune ─→ _do_prune_plan (worker, dry run) ─→ _on_prune_planned (main)
+    #                                                    │ preview in the table
+    #                                                    ├─ "Dry run" ticked → stop
+    #                                                    └─ ConfirmDialog ─→ _do_prune (worker)
+    #
+    # The preview runs in a worker because planning globs the markdown folder
+    # once per article; against ~17K files that is seconds, not milliseconds.
+    # The apply step re-plans inside prune_label rather than trusting the
+    # preview, so it acts on the disk as it is at confirmation time.
+
+    def _start_prune(self, label_name: str) -> None:
+        """Prepare the UI and dispatch the prune preview."""
+        if self._settings is None:
+            self.notify("Settings not loaded — cannot prune", severity="error")
+            return
+
+        widget = self.query_one("#backfill", BackfillWidget)
+        # Not cancellable: prune_label has no stop hook, so Stop stays disabled.
+        widget.set_running(True, cancellable=False)
+        widget.update_progress("Finding backfilled files")
+
+        preview_only = widget.get_params()["dry_run"]
+        self.query_one("#log-panel", LogPanelWidget).set_command(
+            _build_cli_command("backfill_prune", {"label_name": label_name, "yes": False})
+        )
+        self._do_prune_plan(label_name, preview_only)
+
+    @work(thread=True, exclusive=True, group="pipeline")
+    def _do_prune_plan(self, label_name: str, preview_only: bool) -> None:
+        """Work out what a prune would remove, without removing anything."""
+        log_panel = self.query_one("#log-panel", LogPanelWidget)
+        try:
+            self.call_from_thread(
+                log_panel.write, f"\n[bold]Planning prune: {label_name}[/bold]"
+            )
+            result = prune_label(
+                self._settings,
+                label_name,
+                newsletters_dir=self._newsletters_dir,
+                dry_run=True,
+            )
+        except Exception as e:
+            self._prune_failed(label_name, e)
+            return
+        self.call_from_thread(self._on_prune_planned, result, preview_only)
+
+    def _on_prune_planned(self, result: PruneResult, preview_only: bool) -> None:
+        """Show the preview, then stop or ask. Runs on the main thread."""
+        widget = self.query_one("#backfill", BackfillWidget)
+        log_panel = self.query_one("#log-panel", LogPanelWidget)
+        widget.populate_prune(result)
+
+        if not result.targets:
+            log_panel.write(
+                f"[yellow]{result.label}: nothing backfilled — nothing to prune[/yellow]"
+            )
+            self._end_prune("Completed", progress=f"Nothing to prune for {result.label}")
+            self.notify(f"Nothing to prune for {result.label}")
+            return
+
+        newsletters = (Path.cwd() / self._newsletters_dir / result.label).resolve()
+        log_panel.write(
+            f"Would remove {result.files_removed} file(s), "
+            f"{result.directories_removed} folder(s) under {newsletters}, "
+            f"{result.rows_removed} database row(s)"
+        )
+
+        if preview_only:
+            # Mirrors Backfill: a dry run changes nothing, so nothing to confirm.
+            log_panel.write("[yellow]Dry run — nothing was deleted[/yellow]")
+            self._end_prune("Completed", progress="Prune preview — nothing deleted")
+            return
+
+        widget.update_progress("Awaiting confirmation")
+        self.push_screen(
+            ConfirmDialog(
+                f"Prune [bold]{result.label}[/bold]?\n\n"
+                f"Permanently deletes {len(result.targets)} backfilled article(s): "
+                f"{result.files_removed} output file(s), "
+                f"{result.directories_removed} folder(s) under newsletters/ and "
+                f"{result.rows_removed} database row(s).\n\n"
+                "Gmail-ingested articles are not touched. Run Backfill afterwards "
+                "to regenerate.",
+                destructive=True,
+                confirm_label="Prune",
+            ),
+            callback=lambda confirmed, label=result.label: (
+                self._apply_prune(label) if confirmed else self._cancel_prune(label)
+            ),
+        )
+
+    def _cancel_prune(self, label_name: str) -> None:
+        self.query_one("#log-panel", LogPanelWidget).write(
+            f"[yellow]Prune of {label_name} cancelled — nothing was deleted[/yellow]"
+        )
+        self._end_prune("Cancelled")
+
+    def _apply_prune(self, label_name: str) -> None:
+        """Confirmed: dispatch the destructive half."""
+        self.query_one("#log-panel", LogPanelWidget).set_command(
+            _build_cli_command("backfill_prune", {"label_name": label_name, "yes": True})
+        )
+        self.query_one("#backfill", BackfillWidget).update_progress("Pruning")
+        self._do_prune(label_name)
+
+    @work(thread=True, exclusive=True, group="pipeline")
+    def _do_prune(self, label_name: str) -> None:
+        """Delete a label's backfilled artifacts and forget their rows."""
+        widget = self.query_one("#backfill", BackfillWidget)
+        log_panel = self.query_one("#log-panel", LogPanelWidget)
+        try:
+            result = prune_label(
+                self._settings,
+                label_name,
+                newsletters_dir=self._newsletters_dir,
+                dry_run=False,
+            )
+        except Exception as e:
+            self._prune_failed(label_name, e)
+            return
+
+        self.call_from_thread(widget.populate_prune, result)
+        self.call_from_thread(
+            log_panel.write,
+            f"[green]Pruned {label_name}: {result.files_removed} file(s), "
+            f"{result.directories_removed} folder(s), "
+            f"{result.rows_removed} database row(s)[/green]\n"
+            "Next: Backfill this label, then run the ingestor-tools organizer "
+            "and newsletters-web's build_site.py.",
+        )
+        # The State column counts rows by status; they just went away.
+        self.call_from_thread(self._load_mappings)
+        self.call_from_thread(
+            self._end_prune, "Completed", progress=f"Pruned {len(result.targets)} article(s)"
+        )
+        self.call_from_thread(
+            self.notify, f"Pruned {label_name}", severity="information"
+        )
+
+    def _prune_failed(self, label_name: str, error: Exception) -> None:
+        """Report a prune error. Called from a prune worker thread."""
+        logger.exception("Prune failed for %s", label_name)
+        log_panel = self.query_one("#log-panel", LogPanelWidget)
+        self.call_from_thread(log_panel.write, f"[red bold]Error: {error}[/red bold]")
+        self.call_from_thread(self.notify, f"Prune error: {error}", severity="error")
+        self.call_from_thread(self._end_prune, "Failed")
+
+    def _end_prune(self, status: str, *, progress: str | None = None) -> None:
+        """Close out a prune on the main thread, whichever way it ended."""
+        widget = self.query_one("#backfill", BackfillWidget)
+        widget.set_running(False)
+        if progress:
+            widget.update_progress(progress)
+        else:
+            widget.reset_progress()
+        self.query_one("#log-panel", LogPanelWidget).complete_command(status)
 
     @work(thread=True, exclusive=True, group="labels")
     def _run_labels_refresh(self) -> None:
